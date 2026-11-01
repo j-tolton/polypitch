@@ -1,0 +1,3 @@
+build/
+build-native/
+tests/evidence_test
