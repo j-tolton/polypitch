@@ -76,8 +76,8 @@ header{gap:6px;padding-inline:8px}.brand,.spacer{display:none}header>*{flex:none
 <script src="polypitch.js"></script><script>
 (async()=>{'use strict';
 const $=s=>document.querySelector(s),debugBox=$('#debugBox'),debugExport=$('#debugExport'),pcmExport=$('#pcmExport'),cv=$('#plot'),ctx=cv.getContext('2d'),stage=$('#stage'),start=$('#start'),pause=$('#pause'),hist=$('#hist'),histv=$('#histv'),view=$('#view'),follow=$('#follow'),input=$('#input'),openBtn=$('#openRecording'),recFile=$('#recFile'),status=$('#status'),readout=$('#readout'),hint=$('#hint'),keyBtn=$('#keyBtn'),keyLabel=$('#keyLabel'),keyPanel=$('#keyPanel'),settingsBtn=$('#settingsBtn'),settingsPanel=$('#settingsPanel'),diag=$('#diag');
-let M;try{M=await createPolyPitch();if(typeof M._pp_lane_count!=='function'||typeof M._pp_lane_midi!=='function'||typeof M._pp_lane_evidence!=='function'||typeof M._pp_lane_pitch!=='function'||typeof M._pp_input_rms!=='function'||typeof M._pp_debug_top_hz!=='function')throw new Error('WASM/UI mismatch');status.textContent='';start.disabled=false}catch(e){console.error(e);status.textContent='Could not load the audio engine';return}
-const FFT=8192,HOP=1024,RIDGE_GAP=.04,RIDGE_REACH=.45,RIDGE_STRONG=.25,RIDGE_FULL_WEIGHT=.15,DOT_SPACING=1.2,DOT_ALPHA=.34,DOT_RADIUS=7,TINT_LEVELS=12,AGE_FULL=5,CENTRE_FRAMES=16,TINT_AGE=5,GREEN_GAIN_CENTS=9,GREEN_KEEP_CENTS=15,TINT_EASE=.3,HISTORY_MS=300000,SPAN_MIN=6,SPAN_MAX=60,START_SPAN=30,START_CENTRE=57,FOLLOW_AGE=8,FOLLOW_CORE=.6,FOLLOW_TAU_MS=250,LANE_MIN=26,LANE_STEP=.10,OFF_PITCH_RGB=[112,142,168],IN_TUNE_RGB=[66,255,118],OFF_PITCH_GAIN=.46,ring=new Float32Array(FFT),VERSION='6.2';
+let M;try{M=await createPolyPitch();if(typeof M._pp_lane_count!=='function'||typeof M._pp_lane_midi!=='function'||typeof M._pp_lane_evidence!=='function'||typeof M._pp_lane_pitch!=='function'||typeof M._pp_input_rms!=='function'||typeof M._pp_debug_top_hz!=='function'||typeof M._pp_track!=='function')throw new Error('WASM/UI mismatch');status.textContent='';start.disabled=false}catch(e){console.error(e);status.textContent='Could not load the audio engine';return}
+const FFT=8192,HOP=1024,RIDGE_REACH=.45,RIDGE_STRONG=.25,DOT_SPACING=1.2,DOT_ALPHA=.34,DOT_RADIUS=7,TINT_LEVELS=12,AGE_FULL=5,HISTORY_MS=300000,SPAN_MIN=6,SPAN_MAX=60,START_SPAN=30,START_CENTRE=57,FOLLOW_AGE=8,FOLLOW_CORE=.6,FOLLOW_TAU_MS=250,LANE_MIN=26,LANE_STEP=.10,OFF_PITCH_RGB=[112,142,168],IN_TUNE_RGB=[66,255,118],OFF_PITCH_GAIN=.46,ring=new Float32Array(FFT),VERSION='6.3';
 const SHARPS=['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'],FLATS=['C','D♭','D','E♭','E','F','G♭','G','A♭','A','B♭','B'],COMMON_ROOTS=['C','D♭','D','E♭','E','F','F♯','G','A♭','A','B♭','B'];
 // rel is the distance to the relative major, which decides whether a key is spelled with flats.
 const SCALES=[
@@ -97,7 +97,7 @@ const SCALES=[
  {id:'maj7',label:'Major 7th',group:'arp',steps:[0,4,7,11],rel:0},
  {id:'min7',label:'Minor 7th',group:'arp',steps:[0,3,7,10],rel:3},
  {id:'dim7',label:'Diminished 7th',group:'arp',steps:[0,3,6,9],rel:3}];
-let rootPc=0,scaleId='off',targetPcs=null,names=SHARPS,followOn=true;
+let rootPc=0,scaleId='off',targetPcs=null,targetBits=-1,names=SHARPS,followOn=true;
 const diagnostics=[];let ac,stream,node,source,gain,recordingName=null,running=false,paused=false,write=0,filled=0,samplesSinceAnalysis=0,W=0,H=0,dpr=1,span=18,lo=51,hi=69,latestTime=0,pausedTime=null,reviewEnd=null,followGoal=null,readoutMidi=null,readoutMs=0,needsDraw=false,lastAnimMs=0,cursorX=null,cursorY=null,histExact=null;
 let perfAnalysisMs=0,perfDrawMs=0,perfTotalMs=0,perfAudioLagMs=0,perfVisible=0,perfRendered=0,perfLastUi=0;
 let pcmRing=null,pcmWrite=0,pcmFilled=0,pcmTotal=0,pcmSeconds=20,workletBlocks=0;
@@ -150,45 +150,25 @@ function push(msg){if(!running||paused)return;
   analysisSampleIndex=workletFrame!=null?workletFrame:analysisSampleIndex+HOP;
   analyse(analysisSampleIndex);
  }}
-function makeVotes(field,midis,measured){
- // Sample lanes in proportion to their weight; each keeps what that lane measured.
- const weights=new Float32Array(field.length);let total=0;
- for(let i=0;i<field.length;i++){let x=Math.max(0,field[i]-.035);let w=Math.pow(x,2.15);weights[i]=w;total+=w}
- const measures=[];if(total<.012)return {measures};
- const step=total/128;let target=step*.5,acc=0,i=0;
- for(;i<weights.length&&measures.length<128;i++){acc+=weights[i];while(acc>=target&&measures.length<128){measures.push({m:measured[i],w:weights[i]});target+=step}}
- return {measures};
-}
-function ridges(measures){
- // Votes agreeing on a pitch form one ridge. Its authority is its strongest lane, not
- // its vote count: low notes reach more lanes, which must not outrank an upper note.
- const sorted=measures.slice().sort((a,b)=>a.m-b.m),out=[];let sum=0,weight=0,w=0;
- for(let k=0;k<sorted.length;k++){
-  const v=sorted[k];sum+=v.m*v.w;weight+=v.w;w=Math.max(w,v.w);
-  if(k===sorted.length-1||sorted[k+1].m-v.m>RIDGE_GAP){out.push({m:sum/weight,w});sum=0;weight=0;w=0}
+function trackFrame(canBridge){
+ // Line tracking and colour live in the shared C++ core, along with the plugin's.
+ const n=M._pp_track(canBridge?1:0,targetBits),p=M._pp_ridges()>>3,h=M.HEAPF64,out=[];
+ for(let i=0;i<n;i++){
+  const q=p+i*10;
+  out.push({m:h[q],core:h[q+1],centre:h[q+2],tint:h[q+3],alpha:h[q+4],prev:Number.isNaN(h[q+5])?null:h[q+5],prev2:Number.isNaN(h[q+6])?null:h[q+6],age:h[q+7],from:h[q+8],inTune:h[q+9]!==0});
  }
  return out;
 }
-function linkRidges(rs,prev,canBridge){
- // Ridges rank against the frame's strongest, and the frame's own strength scales them
- // all, so a faint noise peak can't shine just because nothing else is sounding.
- let wmax=0;for(const r of rs)if(r.w>wmax)wmax=r.w;
- const presence=Math.min(1,wmax/RIDGE_FULL_WEIGHT),out=[];
- for(const r of rs){
-  const rank=Math.pow(r.w/wmax,3.0);if(rank<=.08)continue;
-  r.core=rank*presence;r.prev=null;r.prev2=null;
-  // Any ridge may continue another, however faint. That history sets how much it has
-  // earned (age) and where a wobbling note is centred (trail).
-  let link=null;r.from=-1;if(canBridge)prev.ridges.forEach((q,qi)=>{if(Math.abs(q.m-r.m)<=RIDGE_REACH&&(!link||Math.abs(q.m-r.m)<Math.abs(link.m-r.m))){link=q;r.from=qi}});
-  r.age=link?link.age+1:0;r.trail=link?[...link.trail.slice(1-CENTRE_FRAMES),r.m]:[r.m];r.centre=r.trail.reduce((a,b)=>a+b,0)/r.trail.length;
-  // Only strong ridges that continue from the last frame join up. Noise stays as dots.
-  if(canBridge&&r.core>=RIDGE_STRONG){
-   let from=null;for(const q of prev.ridges)if(q.core>=RIDGE_STRONG&&Math.abs(q.m-r.m)<=RIDGE_REACH&&(!from||Math.abs(q.m-r.m)<Math.abs(from.m-r.m)))from=q;
-   if(from){r.prev=from.m;r.prev2=from.prev}
-  }
-  out.push(r);
+function retintFrames(){
+ // Old notes are judged against the new targets too, and the next frame continues from them.
+ const put=(h,q,r)=>{h[q]=r.centre;h[q+1]=r.age;h[q+2]=r.from;h[q+3]=r.tint;h[q+4]=r.inTune?1:0};
+ for(let i=0;i<frames.length;i++){
+  const prev=i?frames[i-1].ridges:[],cur=frames[i].ridges,p=M._pp_retint_records(prev.length+cur.length)>>3;
+  let h=M.HEAPF64;prev.forEach((r,k)=>put(h,p+k*5,r));cur.forEach((r,k)=>put(h,p+(prev.length+k)*5,r));
+  M._pp_retint(prev.length,cur.length,targetBits);h=M.HEAPF64;
+  cur.forEach((r,k)=>{const q=p+(prev.length+k)*5;r.tint=h[q+3];r.inTune=h[q+4]!==0});
+  if(i===frames.length-1)M._pp_adopt_tints(prev.length,cur.length);
  }
- return out;
 }
 function followWant(rs,lo,hi,span){
  // The camera answers only to a note that has lasted, and only moves when that note nears
@@ -216,13 +196,12 @@ function analyse(sampleIndex){
  const n=M._pp_lane_count(),mp=M._pp_lane_midi()>>2,ep=M._pp_lane_evidence()>>2,pp=M._pp_lane_pitch()>>2;
  const midis=new Float32Array(n),field=new Float32Array(n),measured=new Float32Array(n);let bi=0,bv=0;
  for(let i=0;i<n;i++){midis[i]=M.HEAPF32[mp+i];field[i]=M.HEAPF32[ep+i];measured[i]=M.HEAPF32[pp+i];if(field[i]>bv){bv=field[i];bi=i}}
- const {measures}=makeVotes(field,midis,measured);
  const perfAfterAnalysis=performance.now();
  const pc=M._pp_peak_count(),pmp=M._pp_peak_midi()>>2,psp=M._pp_peak_strength()>>2;let rawPeaks=[];for(let i=0;i<pc;i++)rawPeaks.push([M.HEAPF32[pmp+i],M.HEAPF32[psp+i]]);rawPeaks.sort((a,b)=>b[1]-a[1]);
  const tc=M._pp_debug_top_count(),thp=M._pp_debug_top_hz()>>2,tdp=M._pp_debug_top_db()>>2;let top=[];for(let i=0;i<tc;i++)top.push([M.HEAPF32[thp+i],M.HEAPF32[tdp+i]]);
  const diagBase={t:now,frame:M._pp_frame_count(),pcmTotal,workletBlocks,windowMean,windowRms,windowZc,rms:M._pp_input_rms(),centroid:M._pp_spectral_centroid(),bg:M._pp_background_mean(),residual:M._pp_residual_mean(),noise:M._pp_noise_floor(),bestMidi:measured[bi],bestEvidence:bv,peakCount:pc,top,rawPeaks:rawPeaks.slice(0,6)};
  const lastFrame=frames.length?frames[frames.length-1]:null,canBridge=lastFrame&&now-lastFrame.t<1000*HOP/ac.sampleRate*2.25;
-  const rs=linkRidges(ridges(measures),lastFrame,canBridge);tintRidges(rs,lastFrame&&lastFrame.ridges);
+  const rs=trackFrame(canBridge);
  latestTime=now;frames.push({t:now,sampleIndex,field,ridges:rs});while(frames.length&&frames[0].t<now-HISTORY_MS)frames.shift();
  const shown=readoutRidge(rs,readoutMidi);
  if(shown){readoutMidi=shown.centre;if(now-readoutMs>120){readoutMs=now;if(reviewEnd==null&&!paused)setReadout(readoutMidi,shown.inTune)}}
@@ -234,18 +213,6 @@ function analyse(sampleIndex){
  const diag={...diagBase,analysisMs:perfAnalysisMs,drawMs:perfDrawMs,totalMs:perfTotalMs,audioLagMs:perfAudioLagMs,retainedFrames:frames.length,visibleFrames:perfVisible,renderedFrames:perfRendered};
  diagnostics.push(diag);while(diagnostics.length>3600)diagnostics.shift();
  if(performance.now()-perfLastUi>500){perfLastUi=performance.now();debugBox.textContent=`frame ${diag.frame}  PCM ${diag.pcmTotal}  blocks ${diag.workletBlocks}\nwin RMS ${diag.windowRms.toFixed(5)}  ZC ${diag.windowZc}  C++ RMS ${diag.rms.toFixed(5)}  centroid ${diag.centroid.toFixed(0)} Hz\nbg ${diag.bg.toFixed(1)} dB  residual ${diag.residual.toFixed(1)} dB  noise ${diag.noise.toFixed(1)}\nbest ${name(diag.bestMidi)} ${(diag.bestMidi-Math.round(diag.bestMidi))*100>=0?'+':''}${((diag.bestMidi-Math.round(diag.bestMidi))*100).toFixed(0)}c  ev ${diag.bestEvidence.toFixed(3)}  peaks ${diag.peakCount}\nFFT ${diag.top.slice(0,4).map(x=>x[0].toFixed(0)+'Hz/'+x[1].toFixed(0)).join('  ')}\npeaks ${diag.rawPeaks.slice(0,4).map(x=>name(x[0])+'/'+x[1].toFixed(2)).join('  ')}\nperf DSP ${diag.analysisMs.toFixed(1)}ms draw ${diag.drawMs.toFixed(1)}ms total ${diag.totalMs.toFixed(1)}ms lag ${diag.audioLagMs.toFixed(0)}ms\nframes ${diag.retainedFrames} visible ${diag.visibleFrames} rendered ${diag.renderedFrames}`;}
-}
-function targetCents(m,pcs){
- // Cents to the nearest target note: any note, or only the selected scale's notes.
- const n=Math.round(m);if(!pcs)return Math.abs(m-n)*100;
- let best=Infinity;for(let k=n-2;k<=n+2;k++)if(pcs.has((k%12+12)%12))best=Math.min(best,Math.abs(m-k));
- return best*100;
-}
-function inTuneAmount(cents){
- // Colour starts at 15 cents, is obvious by about 9, strong at 5 and full by 3.
- const stops=[[3,1],[5,.82],[9,.5],[15,0]];if(cents<=3)return 1;
- for(let i=1;i<stops.length;i++)if(cents<=stops[i][0]){const [c0,t0]=stops[i-1],[c1,t1]=stops[i];return t0+(t1-t0)*(cents-c0)/(c1-c0)}
- return 0;
 }
 const dotSprites=new Map();
 function dotSprite(level){
@@ -278,21 +245,6 @@ function paintField(g,fr,x1,frameDx){
  const top=tileY(LANE_MIN+last*LANE_STEP),bottom=tileY(LANE_MIN+first*LANE_STEP);
  g.drawImage(fieldCv,x1-frameDx/2,top,Math.max(1,frameDx),bottom-top);
 }
-function tintRidges(rs,prevRs){
- // Green is easier to keep than to win, so a note wobbling around its target holds its colour.
- // A ridge must last a moment first, so clicks and bumps stay neutral. The tint then eases
- // towards its goal, and how close the note is still sets how vivid the green is.
- for(const r of rs){
-  const before=r.from>=0&&prevRs?prevRs[r.from]:null,cents=targetCents(r.centre,targetPcs);
-  r.inTune=r.age>=TINT_AGE&&cents<=(before&&before.inTune?GREEN_KEEP_CENTS:GREEN_GAIN_CENTS);
-  const amount=inTuneAmount(cents),goal=r.inTune?Math.max(.65,amount):Math.min(.2,amount),from=before?before.tint:0;
-  r.tint=from+(goal-from)*TINT_EASE;
- }
-}
-function ridgeAlpha(r){
- // A ridge earns its brightness by lasting: a note is full within a moment, a flicker never is.
- return DOT_ALPHA*r.core*Math.min(1,(r.age+1)/AGE_FULL);
-}
 function paintDot(g,x,m,alpha,level){
  g.globalAlpha=Math.min(1,alpha);g.drawImage(dotSprite(level),x-DOT_RADIUS,tileY(m)-DOT_RADIUS,DOT_RADIUS*2,DOT_RADIUS*2);
 }
@@ -307,7 +259,7 @@ function paintFrame(g,fr,prev,x1,x0){
   if(r.m<tileLo-.5||r.m>tileHi+.5)continue;
   // Position shows the real pitch, wobble and all. Colour follows the note's centre, so
   // vibrato around an in-tune pitch stays green.
-  const alpha=ridgeAlpha(r),level=Math.round(r.tint*TINT_LEVELS);
+  const alpha=r.alpha,level=Math.round(r.tint*TINT_LEVELS);
   if(r.prev==null){
    // A ridge with no past: noise stays one faint dot, while a note's onset fills its frame.
    if(r.core<RIDGE_STRONG){paintDot(g,x1,r.m,alpha,level);continue}
@@ -457,7 +409,7 @@ function loadSettings(){
 function setKey(root,id){
  rootPc=root;scaleId=id;const sc=SCALES.find(x=>x.id===id);
  names=sc.steps&&[1,3,5,8,10].includes((root+sc.rel)%12)?FLATS:SHARPS;
- targetPcs=sc.steps?new Set(sc.steps.map(x=>(root+x)%12)):null;
+ targetPcs=sc.steps?new Set(sc.steps.map(x=>(root+x)%12)):null;targetBits=sc.steps?sc.steps.reduce((bits,x)=>bits|1<<((root+x)%12),0):-1;
  const rootName=names[root];
  keyLabel.textContent=!sc.steps?'All notes':sc.group==='arp'?`${rootName} ${sc.label.toLowerCase()} arpeggio`:`${rootName} ${sc.label.toLowerCase()}`;
  keyBtn.classList.toggle('active',!!sc.steps);
@@ -466,7 +418,7 @@ function setKey(root,id){
  const rootChips=$('#rootChips').children;for(let i=0;i<12;i++){rootChips[i].textContent=(sc.steps?names:COMMON_ROOTS)[i];rootChips[i].setAttribute('aria-pressed',!!sc.steps&&i===root)}
  for(const b of keyPanel.querySelectorAll('[data-scale]'))b.setAttribute('aria-pressed',b.dataset.scale===id);
  $('#keyNotes').innerHTML=sc.steps?sc.steps.map(x=>`<b>${names[(root+x)%12]}</b>`).join(''):'Every note counts as a target.';
- frames.forEach((fr,i)=>tintRidges(fr.ridges,i?frames[i-1].ridges:null));
+ retintFrames();
  readoutMs=0;draw(true);saveSettings();
 }
 function buildKeyPanel(){
