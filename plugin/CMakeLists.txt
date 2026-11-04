@@ -5,6 +5,11 @@ project(PolyPitchPlugin VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# A host process can already hold an older C++ runtime, loaded by something else entirely (a shell
+# extension in a file dialog, say), and a plugin would attach to that copy and crash in it. Building
+# the runtime in means it's never at the mercy of what else is loaded.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 # The system VST3 folder needs an elevated build, so copying there is opt-in.
 option(POLYPITCH_COPY_PLUGIN "Copy the VST3 to the system folder after building" OFF)
 option(POLYPITCH_BUILD_TESTS "Build the render and host tests" ON)
@@ -20,10 +25,14 @@ set(POLYPITCH_SOURCES
     Source/TraceView.h
     Source/Scales.h
     Source/Style.h
+    Source/TrackHost.h
     ../dsp/polypitch.cpp
     ../dsp/polypitch.h
+    ../dsp/dual_engine.h
     ../dsp/tracker.cpp
-    ../dsp/tracker.h)
+    ../dsp/tracker.h
+    ../dsp/refine.cpp
+    ../dsp/refine.h)
 
 juce_add_plugin(PolyPitch
     COMPANY_NAME "Jon Tolton"
@@ -41,7 +50,7 @@ juce_add_plugin(PolyPitch
 
 juce_generate_juce_header(PolyPitch)
 
-target_sources(PolyPitch PRIVATE ${POLYPITCH_SOURCES})
+target_sources(PolyPitch PRIVATE ${POLYPITCH_SOURCES} Source/ReaperBridge.cpp Source/ReaperBridge.h)
 target_include_directories(PolyPitch PRIVATE ../dsp)
 
 target_compile_definitions(PolyPitch PUBLIC

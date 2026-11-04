@@ -33,10 +33,17 @@ public:
     void goLive();
     void lookBack(double milliseconds);
     void settingsChanged();
+    // On a timeline, moves the playhead to the time under this x position.
+    void seekToX(float x);
+    double playheadSeconds() const noexcept { return playheadMs / 1000.0; }
 
     // The note to show, or a negative number when there is none, and whether it is in tune.
     std::function<void(double, bool)> onReadout;
     std::function<void()> onFollowChanged;
+    // Whether the transport controls apply, and whether it is playing.
+    std::function<void(bool, bool)> onTransport;
+    // Asked to use the suggested key.
+    std::function<void(int, bool)> onUseKey;
 
     double lastPaintMs() const noexcept { return paintMs; }
 
@@ -71,6 +78,13 @@ private:
     void applySettings();
     juce::String noteLabel(int midi) const;
     void updateLive();
+    void updateKeyButton();
+    void tickTimeline(double now);
+    double timeAtX(float x) const;
+    void fitBetween(double fromMs, double toMs);
+    double secondsLimit() const;
+    void paintPlayhead(juce::Graphics&, double now) const;
+    void paintStatus(juce::Graphics&) const;
 
     void paintGrid(juce::Graphics&) const;
     void paintTiles(juce::Graphics&, double now, float scale);
@@ -99,6 +113,10 @@ private:
     int rootPc = 0, targetBits = polypitch::ANY_NOTE;
     double paintMs = 0.0;
 
+    // The timeline: where the playhead is, and where the view ends.
+    double playheadMs = 0.0, viewEnd = 0.0, hostMs = -1.0, hostMsAt = 0.0, seenNewest = -1.0;
+    bool wasPlaying = false, wasTimeline = false, wasAnalysing = false, viewPlaced = false;
+
     std::map<int, Tile> tiles;
     double tileLo = 0.0, tileHi = 0.0;
     int tileCssHeight = 0;
@@ -118,6 +136,9 @@ private:
     juce::Point<float> cursor;
 
     juce::TextButton liveButton { "Back to live" };
+    juce::TextButton analyseButton { "Analyse track" };
+    juce::TextButton keyButton;
+    juce::String keyButtonFor;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TraceView)
 };

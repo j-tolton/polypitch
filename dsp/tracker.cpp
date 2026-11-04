@@ -41,8 +41,8 @@ void Tracker::makeVotes(const float* field,const float* measured,int laneCount){
  weights.resize(laneCount);votes.clear();double total=0;
  for(int i=0;i<laneCount;i++){const double x=std::max(0.0,(double)field[i]-.035),w=std::pow(x,2.15);weights[i]=(float)w;total+=w;}
  if(total<.012)return;
- const double step=total/128;double target=step*.5,acc=0;
- for(int i=0;i<laneCount&&votes.size()<128;i++){acc+=weights[i];while(acc>=target&&votes.size()<128){votes.push_back({(double)measured[i],(double)weights[i]});target+=step;}}
+ const double step=total/maxVotes;double target=step*.5,acc=0;
+ for(int i=0;i<laneCount&&(int)votes.size()<maxVotes;i++){acc+=weights[i];while(acc>=target&&(int)votes.size()<maxVotes){votes.push_back({(double)measured[i],(double)weights[i]});target+=step;}}
 }
 void Tracker::findRidges(){
  // Votes agreeing on a pitch form one ridge. Its authority is its strongest lane, not
@@ -61,7 +61,7 @@ void Tracker::linkRidges(bool canBridge){
  const double presence=std::min(1.0,wmax/RIDGE_FULL_WEIGHT);
  next.clear();nextTrails.clear();
  for(Ridge r:found){
-  const double rank=std::pow(r.w/wmax,3.0);if(rank<=.08)continue;
+  const double rank=std::pow(r.w/wmax,3.0);if(rank<=floorRank)continue;
   r.core=rank*presence;
   // Any ridge may continue another, however faint. That history sets how much it has
   // earned (age) and where a wobbling note is centred (trail).

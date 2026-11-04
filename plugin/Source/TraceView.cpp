@@ -13,6 +13,8 @@ namespace
     constexpr double laneMin = 26.0, laneStep = 0.1;
     constexpr int followAge = 8;
     constexpr double followCore = 0.6, followTauMs = 250.0, ridgeReach = 0.45;
+    // While playing, a third of the view is what has passed and the rest is what's coming.
+    constexpr double aheadShare = 2.0 / 3.0;
 
     const juce::Colour background { 0xff070b0e };
 
@@ -97,6 +99,15 @@ TraceView::TraceView(PolyPitchAudioProcessor& p) : processor(p)
     liveButton.setVisible(false);
     liveButton.onClick = [this] { goLive(); };
     addChildComponent(liveButton);
+    analyseButton.onClick = [this] { processor.startTrackAnalysis(); needsDraw = true; };
+    addChildComponent(analyseButton);
+    keyButton.onClick = [this]
+    {
+        const auto guess = processor.keyGuess();
+        if (guess.found && onUseKey != nullptr)
+            onUseKey(guess.root, guess.minor);
+    };
+    addChildComponent(keyButton);
     applySettings();
 }
 
@@ -138,7 +149,8 @@ void TraceView::saveView()
 
 void TraceView::resized()
 {
-    liveButton.setBounds(getWidth() - 116, 10, 106, 28);
+    liveButton.setBounds(getWidth() - 136, 10, 126, 28);
+    analyseButton.setBounds(getWidth() - 136 - 8 - 186, 10, 186, 28);
     needsDraw = true;
 }
 
@@ -162,6 +174,8 @@ void TraceView::clampView()
 
 bool TraceView::audioFlowing() const
 {
+    if (processor.isTimeline())
+        return wasPlaying;
     return nowMs() - processor.lastHeardAt() < juce::jmax(300.0, processor.blockMs() * 2.0);
 }
 
@@ -177,7 +191,9 @@ double TraceView::liveEdge() const
 
 double TraceView::displayTime() const
 {
-    return inReview ? reviewEnd : liveEdge();
+    if (inReview)
+        return reviewEnd;
+    return processor.isTimeline() ? viewEnd : liveEdge();
 }
 
 size_t TraceView::firstFrameAfter(double timeMs) const
@@ -238,22 +254,33 @@ void TraceView::zoomPitch(double factor)
 
 void TraceView::zoomTime(double factor)
 {
-    secondsExact = juce::jlimit(secondsMin, secondsMax, secondsExact * factor);
+    secondsExact = juce::jlimit(secondsMin, secondsLimit(), secondsExact * factor);
     seconds = std::round(secondsExact);
     saveView();
     needsDraw = true;
 }
 
+double TraceView::secondsLimit() const
+{
+    // On a timeline you can pull right back to see the whole track.
+    return processor.isTimeline() ? juce::jmax(secondsMax, std::ceil(processor.trackSeconds())) : secondsMax;
+}
+
 void TraceView::fitPitch()
+{
+    const double now = displayTime();
+    fitBetween(now - seconds * 1000.0, now);
+}
+
+void TraceView::fitBetween(double fromMs, double toMs)
 {
     // Frame whatever notes are in view, ignoring stray extremes.
     std::vector<double> found;
     {
         const std::lock_guard<std::mutex> lock(processor.traceLock());
         const auto& frames = processor.traceFrames();
-        const double now = displayTime();
-        const size_t end = firstFrameAfter(now);
-        for (size_t i = firstFrameAfter(now - seconds * 1000.0); i < end; ++i)
+        const size_t end = firstFrameAfter(toMs);
+        for (size_t i = firstFrameAfter(fromMs); i < end; ++i)
             for (const auto& r : frames[i].ridges)
                 if (r.core >= 0.5 && r.age >= polypitch::RIDGE_AGE_FULL)
                     found.push_back(r.m);
@@ -277,12 +304,22 @@ void TraceView::setReview(double timeMs)
         const auto& frames = processor.traceFrames();
         if (frames.empty())
             return;
-        const double edge = liveEdge();
-        inReview = timeMs < edge - 1.0;
-        if (inReview)
+        if (processor.isTimeline())
         {
-            reviewEnd = juce::jmax(timeMs, frames.front().timeMs);
+            // Any move away from the playhead holds until you go back to it, or press play.
+            inReview = true;
+            reviewEnd = juce::jlimit(frames.front().timeMs, frames.back().timeMs + seconds * 1000.0, timeMs);
             hasFollowGoal = false;
+        }
+        else
+        {
+            const double edge = liveEdge();
+            inReview = timeMs < edge - 1.0;
+            if (inReview)
+            {
+                reviewEnd = juce::jmax(timeMs, frames.front().timeMs);
+                hasFollowGoal = false;
+            }
         }
     }
     updateLive();
@@ -306,22 +343,153 @@ void TraceView::lookBack(double milliseconds)
     setReview(displayTime() - milliseconds);
 }
 
+double TraceView::timeAtX(float x) const
+{
+    const int usable = getWidth() - plotLeft - plotRightGap;
+    return displayTime() - seconds * 1000.0 + (x - plotLeft) / usable * seconds * 1000.0;
+}
+
+void TraceView::seekToX(float x)
+{
+    if (auto* host = processor.trackHost(); host != nullptr && processor.isTimeline() && x >= plotLeft)
+        host->seek(juce::jmax(0.0, timeAtX(x) / 1000.0));
+}
+
+void TraceView::tickTimeline(double now)
+{
+    auto* host = processor.trackHost();
+    const bool playing = host->isPlaying();
+    const double reported = host->positionSeconds() * 1000.0;
+
+    // The host reports in steps, so run on the clock between reports.
+    if (reported != hostMs)
+    {
+        hostMs = reported;
+        hostMsAt = now;
+    }
+    double estimate = reported;
+    if (playing)
+    {
+        estimate += juce::jmin(120.0, now - hostMsAt);
+        // Small steps back are only jitter. A large one is a loop or a seek.
+        if (estimate < playheadMs && playheadMs - estimate < 250.0)
+            estimate = playheadMs;
+    }
+    if (estimate != playheadMs)
+        needsDraw = true;
+    playheadMs = estimate;
+
+    if (playing && ! wasPlaying && inReview)
+    {
+        inReview = false;
+        updateLive();
+    }
+    wasPlaying = playing;
+
+    if (! inReview)
+    {
+        const bool outside = playheadMs < viewEnd - seconds * 1000.0 || playheadMs > viewEnd;
+        if (playing || outside || ! viewPlaced)
+            viewEnd = playheadMs + seconds * 1000.0 * aheadShare;
+        viewPlaced = true;
+    }
+
+    const bool analysing = processor.isAnalysing();
+    if (wasAnalysing && ! analysing)
+    {
+        // The whole track has arrived. Frame it, unless you've already chosen a view.
+        if (followOn)
+            fitBetween(-1.0e12, 1.0e12);
+        needsDraw = true;
+    }
+    wasAnalysing = analysing;
+}
+
+void TraceView::updateKeyButton()
+{
+    // Offered until you've chosen a scale, and not after.
+    const auto guess = processor.keyGuess();
+    const bool offer = guess.found && processor.view().scaleId == "off";
+    if (offer)
+    {
+        const auto keyName = [](int root, bool minor)
+        {
+            const auto& scale = polypitch::scales::all()[minor ? 2 : 1];
+            return juce::String::fromUTF8(polypitch::scales::noteName(root, polypitch::scales::usesFlats(root, scale))) + (minor ? " minor" : " major");
+        };
+        auto text = "Sounds like " + keyName(guess.root, guess.minor) + " (or " + keyName(guess.nextRoot, guess.nextMinor) + "). Use it";
+        // Only worth saying when the notes agree with each other and it's more than a hair out.
+        if (guess.tuningFocus >= 0.2 && std::abs(guess.tuningCents) >= 4.0 && std::abs(guess.tuningCents) <= 30.0)
+            text = "A=" + juce::String(juce::roundToInt(440.0 * std::pow(2.0, guess.tuningCents / 1200.0))) + "   " + text;
+        if (text != keyButtonFor)
+        {
+            keyButtonFor = text;
+            keyButton.setButtonText(text);
+            keyButton.setBounds(plotLeft + 10, 10, juce::jmin(text.length() * 7 + 28, getWidth() - plotLeft - 20), 28);
+        }
+    }
+    if (keyButton.isVisible() != offer)
+        keyButton.setVisible(offer);
+}
+
 void TraceView::tick()
 {
     const double now = nowMs();
     const double dt = juce::jmin(100.0, now - lastTickAt);
     lastTickAt = now;
 
+    const bool onTimeline = processor.isTimeline();
+    if (onTimeline != wasTimeline)
+    {
+        wasTimeline = onTimeline;
+        inReview = false;
+        viewPlaced = false;
+        updateLive();
+        needsDraw = true;
+    }
+    if (onTimeline)
+        tickTimeline(now);
+    if (onTransport != nullptr)
+        onTransport(onTimeline, onTimeline && wasPlaying);
+
+    const bool canAnalyse = processor.trackChanged() && ! processor.isAnalysing();
+    if (canAnalyse != analyseButton.isVisible())
+    {
+        analyseButton.setButtonText(onTimeline ? "Track changed: analyse again" : "Analyse this track");
+        analyseButton.setVisible(canAnalyse);
+    }
+    liveButton.setButtonText(onTimeline ? "Back to playhead" : "Back to live");
+    updateKeyButton();
+
     {
         const std::lock_guard<std::mutex> lock(processor.traceLock());
         const auto& frames = processor.traceFrames();
         const double newest = frames.empty() ? -1.0 : frames.back().timeMs;
-        if (newest != seenFrameTime)
+        if (newest != seenNewest)
         {
-            seenFrameTime = newest;
-            if (! frames.empty())
+            seenNewest = newest;
+            if (onTimeline)
+                needsDraw = true;
+        }
+
+        // Live, the newest frame is the note. On a timeline, it's the one under the playhead.
+        const TraceFrame* current = frames.empty() ? nullptr : &frames.back();
+        if (onTimeline && current != nullptr)
+        {
+            const size_t after = firstFrameAfter(playheadMs);
+            current = after > 0 && playheadMs - frames[after - 1].timeMs < 100.0 ? &frames[after - 1] : nullptr;
+        }
+        static const std::vector<polypitch::Ridge> noRidges;
+        const double currentTime = current != nullptr ? current->timeMs : (onTimeline ? -2.0 : -1.0);
+        if (currentTime != seenFrameTime)
+        {
+            seenFrameTime = currentTime;
+            // Outside the track there won't be another frame to clear the readout.
+            if (current == nullptr)
+                readoutShownAt = 0.0;
+            if (current != nullptr || onTimeline)
             {
-                const auto& ridges = frames.back().ridges;
+                const auto& ridges = current != nullptr ? current->ridges : noRidges;
                 if (followOn && ! inReview)
                 {
                     double goal = 0.0;
@@ -476,6 +644,20 @@ void TraceView::paintField(Tile& tile, const TraceFrame& frame, double x1, doubl
     if (col0 >= col1 || rowHeight <= 0.0)
         return;
 
+    // Once cleaned up, the background only shows as the fringe around the notes that are left.
+    std::array<bool, 741> nearNote;
+    const bool masked = processor.isShowingClean() && laneCount <= (int) nearNote.size();
+    if (masked)
+    {
+        nearNote.fill(false);
+        for (const auto& r : frame.ridges)
+        {
+            const int centreLane = (int) std::round((r.m - laneMin) / laneStep);
+            for (int lane = juce::jmax(0, centreLane - 6); lane <= juce::jmin(laneCount - 1, centreLane + 6); ++lane)
+                nearNote[(size_t) lane] = true;
+        }
+    }
+
     const float red = 150.0f / 255.0f, green = 175.0f / 255.0f, blue = 190.0f / 255.0f;
     const int y0 = juce::jmax(0, (int) std::floor(top)), y1 = juce::jmin(height, (int) std::ceil(bottom));
     for (int py = y0; py < y1; ++py)
@@ -484,8 +666,9 @@ void TraceView::paintField(Tile& tile, const TraceFrame& frame, double x1, doubl
         const double position = juce::jlimit(0.0, (double) (rows - 1), (py + 0.5 - top) / rowHeight - 0.5);
         const int row = (int) position;
         const float blend = (float) (position - row);
-        const float a0 = fieldShape[frame.field[(size_t) (last - row)]];
-        const float a1 = fieldShape[frame.field[(size_t) (last - juce::jmin(rows - 1, row + 1))]];
+        const int lane0 = last - row, lane1 = last - juce::jmin(rows - 1, row + 1);
+        const float a0 = masked && ! nearNote[(size_t) lane0] ? 0.0f : fieldShape[frame.field[(size_t) lane0]];
+        const float a1 = masked && ! nearNote[(size_t) lane1] ? 0.0f : fieldShape[frame.field[(size_t) lane1]];
         const float alpha = a0 + (a1 - a0) * blend;
         if (alpha <= 0.0f)
             continue;
@@ -680,7 +863,7 @@ void TraceView::paintTiles(juce::Graphics& g, double now, float scale)
     const double earliest = frames.front().timeMs;
     for (int index = firstTile; index <= lastTile; ++index)
     {
-        if ((index + 1) * tileMs + 200.0 < earliest)
+        if ((index + 1) * tileMs + 200.0 < earliest || index * tileMs - 200.0 > frames.back().timeMs)
             continue;
         const auto& tile = ensureTile(index, pixelsPerMs, scale);
         g.drawImageAt(tile.image, left + (int) (tile.column - offset), top);
@@ -695,8 +878,8 @@ void TraceView::paintTimeAxis(juce::Graphics& g, double now) const
         return;
     const double newest = frames.back().timeMs, sec = seconds;
     const int usable = getWidth() - plotLeft - plotRightGap;
-    double step = 60.0;
-    for (double s : { 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0 })
+    double step = 600.0;
+    for (double s : { 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0 })
         if (sec / s <= 10.0)
         {
             step = s;
@@ -705,6 +888,24 @@ void TraceView::paintTimeAxis(juce::Graphics& g, double now) const
 
     g.setFont(polypitch::style::font(11.0f));
     g.setColour(juce::Colour(0xff778991));
+
+    if (processor.isTimeline())
+    {
+        // Project time, matching Reaper's ruler.
+        const double from = now - sec * 1000.0;
+        for (int k = (int) std::ceil(juce::jmax(0.0, from) / 1000.0 / step); k * step * 1000.0 <= now; ++k)
+        {
+            const double x = plotLeft + (k * step * 1000.0 - from) / (sec * 1000.0) * usable;
+            if (x < 90.0 || x > getWidth() - 20.0)
+                continue;
+            const int total = (int) (k * step);
+            g.fillRect((float) x, (float) getHeight() - 4.0f, 1.0f, 4.0f);
+            g.drawText(juce::String(total / 60) + ":" + juce::String(total % 60).paddedLeft('0', 2),
+                       juce::Rectangle<float>((float) x - 30.0f, (float) getHeight() - 20.0f, 60.0f, 15.0f), juce::Justification::centred, false);
+        }
+        return;
+    }
+
     for (int k = (int) std::ceil((newest - now) / 1000.0 / step); k * step <= (newest - now + sec * 1000.0) / 1000.0; ++k)
     {
         const double x = plotLeft + (newest - k * step * 1000.0 - (now - sec * 1000.0)) / (sec * 1000.0) * usable;
@@ -726,6 +927,8 @@ void TraceView::paintCursor(juce::Graphics& g, double now)
         return;
     const int usable = getWidth() - plotLeft - plotRightGap;
     const double t = now - seconds * 1000.0 + (cursor.x - plotLeft) / usable * seconds * 1000.0;
+    if (processor.isTimeline() && (t < frames.front().timeMs - 100.0 || t > frames.back().timeMs + 100.0))
+        return;
     const auto& frame = frames[juce::jmin(frames.size() - 1, firstFrameAfter(t))];
     g.setColour(rgba(200, 212, 218, 0.35f));
     g.fillRect(cursor.x, 0.0f, 1.0f, (float) getHeight());
@@ -745,6 +948,29 @@ void TraceView::paintCursor(juce::Graphics& g, double now)
     onReadout(best != nullptr ? best->m : -1.0, best != nullptr && best->inTune);
 }
 
+void TraceView::paintPlayhead(juce::Graphics& g, double now) const
+{
+    const int usable = getWidth() - plotLeft - plotRightGap;
+    const double x = plotLeft + (playheadMs - (now - seconds * 1000.0)) / (seconds * 1000.0) * usable;
+    if (x < plotLeft || x > getWidth())
+        return;
+    g.setColour(juce::Colour(0xffe9f0f3).withAlpha(0.75f));
+    g.fillRect((float) x - 0.5f, 0.0f, 1.5f, (float) getHeight());
+}
+
+void TraceView::paintStatus(juce::Graphics& g) const
+{
+    if (! processor.isAnalysing())
+        return;
+    const auto text = "Analysing " + processor.trackTitle() + "   " + juce::String(juce::roundToInt(processor.analysisProgress() * 100.0)) + "%";
+    const auto area = juce::Rectangle<float>((float) plotLeft + 10.0f, 10.0f, 300.0f, 28.0f);
+    g.setColour(juce::Colour(0xff162027));
+    g.fillRoundedRectangle(area, 6.0f);
+    g.setColour(juce::Colour(0xffe9f0f3));
+    g.setFont(polypitch::style::font(13.0f));
+    g.drawText(text, area.reduced(10.0f, 0.0f), juce::Justification::centredLeft, true);
+}
+
 void TraceView::paint(juce::Graphics& g)
 {
     const double started = nowMs();
@@ -756,9 +982,12 @@ void TraceView::paint(juce::Graphics& g)
         const double now = displayTime();
         paintTiles(g, now, scale);
         paintTimeAxis(g, now);
+        if (processor.isTimeline())
+            paintPlayhead(g, now);
         paintCursor(g, now);
+        paintStatus(g);
 
-        if (processor.traceFrames().empty())
+        if (processor.traceFrames().empty() && ! processor.isAnalysing())
         {
             g.setColour(juce::Colour(0xff8fa0a9));
             g.setFont(polypitch::style::font(14.0f));
@@ -809,6 +1038,8 @@ void TraceView::mouseUp(const juce::MouseEvent& event)
         hasCursor = true;
         cursor = event.position;
         needsDraw = true;
+        // On a timeline a click also moves the playhead there.
+        seekToX(event.position.x);
     }
 }
 

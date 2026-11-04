@@ -2,22 +2,33 @@
 
 #include <JuceHeader.h>
 #include "polypitch.h"
+#include "dual_engine.h"
 #include "tracker.h"
+#include "refine.h"
+#include "TrackHost.h"
 #include <atomic>
 #include <deque>
 #include <mutex>
 #include <vector>
 
+#if ! POLYPITCH_NO_PLUGIN_ENTRY
+ #include "ReaperBridge.h"
+#endif
+
 // One analysed moment. Lanes keep only a byte each, because five minutes of them add up.
 struct TraceFrame
 {
     double timeMs = 0.0;
+    float level = 0.0f;
     std::vector<polypitch::Ridge> ridges;
+    // On a timeline, the other version of this frame: cleaned up or as first heard.
+    std::vector<polypitch::Ridge> alternative;
     std::vector<juce::uint8> field;
 };
 
 class PolyPitchAudioProcessor final : public juce::AudioProcessor,
-                                      private juce::Thread
+                                      private juce::Thread,
+                                      private juce::Timer
 {
 public:
     // What the editor shows, kept with the project.
@@ -29,6 +40,7 @@ public:
         double span = 30.0;
         double centre = 57.0;
         bool follow = true;
+        bool clean = true;
         int width = 960;
         int height = 540;
     };
@@ -70,6 +82,29 @@ public:
     double blockMs() const noexcept { return lastBlockMs.load(); }
 
     void setTargets(int mask);
+
+    // Working on a whole track. Frames are placed on the project timeline, and the live
+    // audio is ignored. Without a track to read the plugin listens instead.
+    void setTrackHost(TrackHost*);
+    TrackHost* trackHost() noexcept { return track; }
+    bool isTimeline() const noexcept { return timeline.load(); }
+    bool startTrackAnalysis();
+    void analyseTrackOnce();
+    bool isAnalysing() const noexcept { return timeline.load() && ! refined.load(); }
+    // Show the cleaned-up trace, or everything as first heard.
+    void setCleanTrace(bool shouldBeClean);
+    bool hasCleanTrace() const noexcept { return timeline.load() && refined.load(); }
+    bool isShowingClean() const noexcept { return hasCleanTrace() && viewSettings.clean; }
+    polypitch::KeyGuess keyGuess() const;
+    polypitch::RefineStats refineStats() const;
+    double analysisProgress() const noexcept;
+    bool trackChanged() const noexcept { return changed; }
+    double trackSeconds() const noexcept { return trackEnd - trackStart; }
+    const juce::String& trackTitle() const noexcept { return trackLabel; }
+
+#if ! POLYPITCH_NO_PLUGIN_ENTRY
+    juce::VST3ClientExtensions* getVST3ClientExtensions() override { return &reaper; }
+#endif
     ViewSettings& view() noexcept { return viewSettings; }
 
     // Waits until the analysis has caught up with the audio. For tests.
@@ -77,6 +112,10 @@ public:
 
 private:
     void run() override;
+    void timerCallback() override;
+    void readTrackChunk();
+    void pushChunk(std::vector<float>&&);
+    void refineFrames();
     void analyseMono(const float* samples, int count);
     void configure(double sampleRate);
     void analyseWindow();
@@ -87,6 +126,7 @@ private:
     static constexpr double historyMs = 300000.0;
     static constexpr int fifoSize = 1 << 19;
     static constexpr double targetRate = 48000.0;
+    static constexpr int trackChunk = 24000, maxQueuedChunks = 8;
 
     // Written by the audio thread.
     juce::AbstractFifo fifo { fifoSize };
@@ -98,13 +138,31 @@ private:
 
     // Used by the analysis thread.
     std::unique_ptr<polypitch::Engine> engine;
+    std::unique_ptr<polypitch::DualEngine> trackEngine;
     polypitch::Tracker tracker;
+    polypitch::Tracker candidateTracker = polypitch::refineTracker();
     std::vector<float> ring, window, antiAlias, decimatorHistory;
     int decimation = 1, decimatorWrite = 0, decimatorCountdown = 0;
     int ringWrite = 0, ringFilled = 0, sinceAnalysis = 0;
     juce::int64 analysedSamples = 0;
     double analysisRate = 48000.0;
     bool isFirstFrame = true;
+
+    // Reading a track. The message thread reads it and the analysis thread takes the chunks.
+    std::mutex chunkLock;
+    std::deque<std::vector<float>> chunks;
+    TrackHost* track = nullptr;
+    std::atomic<bool> timeline { false };
+    std::atomic<juce::int64> analysedSamples2 { 0 }, totalSamples { 0 };
+    std::atomic<bool> refined { false };
+    bool showingClean = true;
+    polypitch::KeyGuess guess;
+    polypitch::RefineStats lastStats;
+    double trackStart = 0.0, trackEnd = 0.0;
+    juce::int64 trackRead = 0, trackLength = 0;
+    bool readingTrack = false, changed = false, askedToAnalyse = false;
+    int pollCountdown = 0;
+    juce::String trackLabel;
 
     // Shared between the analysis thread and the editor.
     std::mutex frameLock;
@@ -113,6 +171,10 @@ private:
     int targets = polypitch::ANY_NOTE;
 
     ViewSettings viewSettings;
+
+#if ! POLYPITCH_NO_PLUGIN_ENTRY
+    ReaperBridge reaper;
+#endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PolyPitchAudioProcessor)
 };

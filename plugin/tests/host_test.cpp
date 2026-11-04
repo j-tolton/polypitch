@@ -1,5 +1,5 @@
 // Loads the built VST3 the way a host does, plays through it and opens its window.
-//   PolyPitchHostTest path\to\PolyPitch.vst3
+//   PolyPitchHostTest path\to\PolyPitch.vst3 [a DLL to load first, as something else in a host might]
 #include <JuceHeader.h>
 
 namespace
@@ -19,6 +19,11 @@ int main(int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI gui;
     if (argc < 2)
         return 2;
+
+    // Left loaded, as a shell extension would be.
+    static juce::DynamicLibrary alreadyLoaded;
+    if (argc > 2)
+        check(alreadyLoaded.open(juce::String(argv[2])), "already loaded: " + juce::String(argv[2]));
 
     juce::VST3PluginFormat format;
     juce::OwnedArray<juce::PluginDescription> found;

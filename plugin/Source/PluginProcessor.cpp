@@ -9,10 +9,14 @@ PolyPitchAudioProcessor::PolyPitchAudioProcessor()
       juce::Thread("PolyPitch analysis")
 {
     fifoData.resize((size_t) fifoSize);
+#if ! POLYPITCH_NO_PLUGIN_ENTRY
+    reaper.onAvailable = [this] { setTrackHost(&reaper); };
+#endif
 }
 
 PolyPitchAudioProcessor::~PolyPitchAudioProcessor()
 {
+    stopTimer();
     stopThread(2000);
 }
 
@@ -35,9 +39,11 @@ void PolyPitchAudioProcessor::configure(double sampleRate)
     config.fftSize = fftSize;
     config.hop = hopSize;
     engine = std::make_unique<polypitch::Engine>(config);
+    trackEngine = std::make_unique<polypitch::DualEngine>(config.sampleRate, hopSize);
     jassert(engine->laneCount() == laneCount);
 
     tracker.reset();
+    candidateTracker.reset();
     isFirstFrame = true;
     ring.assign((size_t) fftSize, 0.0f);
     window.assign((size_t) fftSize, 0.0f);
@@ -73,6 +79,13 @@ void PolyPitchAudioProcessor::configure(double sampleRate)
 
 void PolyPitchAudioProcessor::prepareToPlay(double sampleRate, int)
 {
+    // A track is read at its own rate, whatever the project is playing at.
+    if (timeline.load())
+    {
+        hostRate.store(sampleRate);
+        return;
+    }
+
     // Hosts prepare again for all sorts of reasons. Only a new rate invalidates the trace.
     if (! isThreadRunning() || engine == nullptr || sampleRate != hostRate.load())
     {
@@ -94,7 +107,7 @@ void PolyPitchAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     juce::ScopedNoDenormals noDenormals;
 
     // The sound passes through untouched, whatever the analysis does.
-    if (isNonRealtime())
+    if (isNonRealtime() || timeline.load())
         return;
 
     const int numSamples = buffer.getNumSamples();
@@ -146,6 +159,29 @@ void PolyPitchAudioProcessor::run()
     std::vector<float> chunk(4096);
     while (! threadShouldExit())
     {
+        if (timeline.load())
+        {
+            std::vector<float> next;
+            {
+                const std::lock_guard<std::mutex> lock(chunkLock);
+                if (! chunks.empty())
+                {
+                    next = std::move(chunks.front());
+                    chunks.pop_front();
+                }
+            }
+            if (next.empty())
+            {
+                if (! refined.load() && analysedSamples2.load() >= totalSamples.load() && totalSamples.load() > 0)
+                    refineFrames();
+                else
+                    wait(5);
+            }
+            else
+                analyseMono(next.data(), (int) next.size());
+            continue;
+        }
+
         const int ready = fifo.getNumReady();
         if (ready == 0)
         {
@@ -185,6 +221,7 @@ void PolyPitchAudioProcessor::analyseMono(const float* samples, int count)
         ringWrite = (ringWrite + 1) % fftSize;
         ringFilled = juce::jmin(fftSize, ringFilled + 1);
         ++analysedSamples;
+        analysedSamples2.store(analysedSamples, std::memory_order_relaxed);
         if (ringFilled < fftSize)
         {
             sinceAnalysis = hopSize - 1;
@@ -202,21 +239,217 @@ void PolyPitchAudioProcessor::analyseWindow()
 {
     for (int i = 0; i < fftSize; ++i)
         window[(size_t) i] = ring[(size_t) ((ringWrite + i) % fftSize)];
-    engine->analyse(window.data(), window.size());
+    const bool onTimeline = timeline.load();
+    if (onTimeline)
+        trackEngine->analyse(window.data());
+    else
+        engine->analyse(window.data(), window.size());
 
     TraceFrame frame;
-    frame.timeMs = 1000.0 * (double) analysedSamples / analysisRate;
+    // On a timeline a frame belongs at the middle of its window, so the trace lines up with the sound.
+    frame.timeMs = onTimeline ? 1000.0 * (trackStart + (double) (analysedSamples - fftSize) / analysisRate)
+                                   : 1000.0 * (double) analysedSamples / analysisRate;
+    frame.level = onTimeline ? trackEngine->inputRms() : engine->inputRms();
     frame.field.resize((size_t) laneCount);
-    const auto* evidence = engine->laneEvidence();
+    const auto* evidence = onTimeline ? trackEngine->laneEvidence() : engine->laneEvidence();
+    const auto* measured = onTimeline ? trackEngine->lanePitch() : engine->lanePitch();
     for (int i = 0; i < laneCount; ++i)
         frame.field[(size_t) i] = (juce::uint8) juce::jlimit(0, 255, (int) (evidence[i] * 255.0f + 0.5f));
 
     const std::lock_guard<std::mutex> lock(frameLock);
-    frame.ridges = tracker.track(evidence, engine->lanePitch(), laneCount, ! isFirstFrame, targets);
+    frame.ridges = tracker.track(evidence, measured, laneCount, ! isFirstFrame, targets);
+    if (onTimeline)
+    {
+        frame.alternative = candidateTracker.track(evidence, measured, laneCount, ! isFirstFrame, targets);
+        polypitch::markPeaks(frame.alternative, trackEngine->peakMidi(), trackEngine->peakStrength(), trackEngine->peakCount());
+    }
     isFirstFrame = false;
     frames.push_back(std::move(frame));
-    while (! frames.empty() && frames.front().timeMs < frames.back().timeMs - historyMs)
+    while (! timeline.load() && ! frames.empty() && frames.front().timeMs < frames.back().timeMs - historyMs)
         frames.pop_front();
+}
+
+void PolyPitchAudioProcessor::refineFrames()
+{
+    const std::lock_guard<std::mutex> lock(frameLock);
+    std::vector<std::vector<polypitch::Ridge>> cleaned, candidates;
+    std::vector<double> levels;
+    cleaned.reserve(frames.size());
+    candidates.reserve(frames.size());
+    levels.reserve(frames.size());
+    for (auto& frame : frames)
+    {
+        cleaned.push_back(frame.ridges);
+        candidates.push_back(std::move(frame.alternative));
+        levels.push_back(frame.level);
+    }
+    lastStats = polypitch::refineTrace(cleaned, analysisRate / hopSize, targets, nullptr, &candidates, &levels);
+    guess = polypitch::guessKey(cleaned);
+    for (size_t i = 0; i < frames.size(); ++i)
+        frames[i].alternative = std::move(cleaned[i]);
+    showingClean = false;
+    refined.store(true);
+    if (viewSettings.clean)
+        for (auto& frame : frames)
+            frame.ridges.swap(frame.alternative);
+    showingClean = viewSettings.clean;
+    generation.fetch_add(1);
+}
+
+void PolyPitchAudioProcessor::setCleanTrace(bool shouldBeClean)
+{
+    const std::lock_guard<std::mutex> lock(frameLock);
+    viewSettings.clean = shouldBeClean;
+    if (! refined.load() || showingClean == shouldBeClean)
+        return;
+    showingClean = shouldBeClean;
+    for (size_t i = 0; i < frames.size(); ++i)
+    {
+        frames[i].ridges.swap(frames[i].alternative);
+        // The targets may have changed while this version was out of sight.
+        polypitch::tintRidges(frames[i].ridges, i > 0 ? &frames[i - 1].ridges : nullptr, targets);
+    }
+    generation.fetch_add(1);
+}
+
+polypitch::KeyGuess PolyPitchAudioProcessor::keyGuess() const
+{
+    return refined.load() ? guess : polypitch::KeyGuess {};
+}
+
+polypitch::RefineStats PolyPitchAudioProcessor::refineStats() const
+{
+    return lastStats;
+}
+
+void PolyPitchAudioProcessor::setTrackHost(TrackHost* host)
+{
+    track = host;
+    pollCountdown = 0;
+    startTimer(250);
+}
+
+void PolyPitchAudioProcessor::analyseTrackOnce()
+{
+    if (track != nullptr && ! askedToAnalyse)
+    {
+        askedToAnalyse = true;
+        startTrackAnalysis();
+    }
+}
+
+bool PolyPitchAudioProcessor::startTrackAnalysis()
+{
+    if (track == nullptr)
+        return false;
+
+    const bool opened = track->open();
+    const double start = opened ? track->startSeconds() : 0.0, end = opened ? track->endSeconds() : 0.0;
+    changed = false;
+
+    if (! opened || end - start < 0.05)
+    {
+        // Nothing on the track yet, so listen to whatever arrives instead.
+        if (timeline.load())
+        {
+            stopThread(2000);
+            fifo.reset();
+            heardSamples.store(0);
+            configure(hostRate.load());
+            readingTrack = false;
+            timeline.store(false);
+            startThread(juce::Thread::Priority::low);
+        }
+        return false;
+    }
+
+    const bool wasTimeline = timeline.exchange(true);
+    juce::ignoreUnused(wasTimeline);
+    stopThread(2000);
+    {
+        const std::lock_guard<std::mutex> lock(chunkLock);
+        chunks.clear();
+    }
+    trackStart = start;
+    trackEnd = end;
+    trackLength = (juce::int64) ((end - start) * targetRate);
+    trackRead = 0;
+    trackLabel = track->trackName();
+    configure(targetRate);
+    analysedSamples2.store(0);
+    refined.store(false);
+    // Half a window of silence each side, so the first and last frames centre on the track's ends.
+    totalSamples.store(trackLength + fftSize);
+    readingTrack = true;
+    pushChunk(std::vector<float>((size_t) (fftSize / 2), 0.0f));
+    startThread(juce::Thread::Priority::low);
+    startTimer(10);
+    return true;
+}
+
+void PolyPitchAudioProcessor::pushChunk(std::vector<float>&& samples)
+{
+    const std::lock_guard<std::mutex> lock(chunkLock);
+    chunks.push_back(std::move(samples));
+}
+
+void PolyPitchAudioProcessor::readTrackChunk()
+{
+    {
+        const std::lock_guard<std::mutex> lock(chunkLock);
+        if ((int) chunks.size() >= maxQueuedChunks)
+            return;
+    }
+
+    const int count = (int) juce::jmin((juce::int64) trackChunk, trackLength - trackRead);
+    if (count > 0)
+    {
+        std::vector<double> stereo((size_t) count * 2);
+        track->read(trackStart + (double) trackRead / targetRate, (int) targetRate, count, stereo.data());
+        std::vector<float> mono((size_t) count);
+        for (int i = 0; i < count; ++i)
+            mono[(size_t) i] = (float) ((stereo[(size_t) i * 2] + stereo[(size_t) i * 2 + 1]) * 0.5);
+        pushChunk(std::move(mono));
+        trackRead += count;
+    }
+
+    if (trackRead >= trackLength)
+    {
+        pushChunk(std::vector<float>((size_t) (fftSize / 2), 0.0f));
+        readingTrack = false;
+        startTimer(250);
+    }
+}
+
+void PolyPitchAudioProcessor::timerCallback()
+{
+    if (track == nullptr)
+        return;
+    if (readingTrack)
+    {
+        readTrackChunk();
+        return;
+    }
+
+    // About once a second, see whether the track has moved on from the trace.
+    if (--pollCountdown > 0)
+        return;
+    pollCountdown = 4;
+    if (timeline.load())
+    {
+        if (track->audioChanged())
+            changed = true;
+    }
+    else if (askedToAnalyse && ! changed && track->open() && track->endSeconds() - track->startSeconds() >= 0.05)
+    {
+        changed = true;
+    }
+}
+
+double PolyPitchAudioProcessor::analysisProgress() const noexcept
+{
+    const auto total = totalSamples.load();
+    return total > 0 ? juce::jlimit(0.0, 1.0, (double) analysedSamples2.load() / (double) total) : 0.0;
 }
 
 void PolyPitchAudioProcessor::setTargets(int mask)
@@ -255,6 +488,7 @@ void PolyPitchAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     xml.setAttribute("span", viewSettings.span);
     xml.setAttribute("centre", viewSettings.centre);
     xml.setAttribute("follow", viewSettings.follow);
+    xml.setAttribute("clean", viewSettings.clean);
     xml.setAttribute("width", viewSettings.width);
     xml.setAttribute("height", viewSettings.height);
     copyXmlToBinary(xml, destData);
@@ -268,10 +502,11 @@ void PolyPitchAudioProcessor::setStateInformation(const void* data, int sizeInBy
 
     viewSettings.rootPc = juce::jlimit(0, 11, xml->getIntAttribute("rootPc", 0));
     viewSettings.scaleId = xml->getStringAttribute("scale", "off");
-    viewSettings.seconds = juce::jlimit(2.0, 60.0, xml->getDoubleAttribute("seconds", 10.0));
+    viewSettings.seconds = juce::jlimit(2.0, 7200.0, xml->getDoubleAttribute("seconds", 10.0));
     viewSettings.span = juce::jlimit(6.0, 60.0, xml->getDoubleAttribute("span", 30.0));
     viewSettings.centre = juce::jlimit(24.0, 108.0, xml->getDoubleAttribute("centre", 57.0));
     viewSettings.follow = xml->getBoolAttribute("follow", true);
+    setCleanTrace(xml->getBoolAttribute("clean", true));
     viewSettings.width = juce::jlimit(480, 3000, xml->getIntAttribute("width", 960));
     viewSettings.height = juce::jlimit(280, 2000, xml->getIntAttribute("height", 540));
 

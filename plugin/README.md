@@ -16,10 +16,15 @@ To copy to the system VST3 folder instead, configure with `-DPOLYPITCH_COPY_PLUG
 
 ## Using it
 
-- Drag sideways to look back, or up and down to move through pitch.
+- In Reaper it reads the track it sits on and analyses it in the background when the window first opens, so the whole trace is there to navigate. Click to move the playhead, and use Play or Reaper's own transport. If the audio changes, it offers to analyse again.
+- Tracks are analysed with two window lengths, a long one below E3 where low notes need it and a short one above, which follows quick notes and separates voices better. Listening live uses the long one alone.
+- Once analysed, the trace is cleaned up, starting with anything 30 dB or more below the track's playing level, using the whole track: what doesn't last, connect to a note or keep returning to one pitch alongside another voice is removed, along with faint harmonics that shadow a louder note. Quieter voices are lifted to their own level. Fainter lines that have their own spectral peak, off the harmonic series of anything louder, are drawn dimmer: they are probably a second voice, but could be something else in the recording. The Clean button switches back to everything as first heard.
+- It suggests a key and, if the track isn't at A=440, its tuning. The suggestion disappears once you've chosen a scale.
+- On a track with no audio, or in another DAW, it listens to the track as it plays instead.
+- Drag sideways to move through time, or up and down to move through pitch.
 - Scroll to move through pitch, Shift-scroll to move through time, Ctrl-scroll to zoom pitch and Alt-scroll to zoom time.
 - Point at the trace when it isn't moving to read the note under the cursor.
-- The trace is kept for five minutes while the plugin is loaded. The scale and view settings are saved with the project, but the trace is not.
+- The scale and view settings are saved with the project, but the trace is not. It is analysed again when you reopen the window. When listening, it keeps the last five minutes.
 
 ## Tests
 

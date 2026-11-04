@@ -79,6 +79,35 @@ PolyPitchAudioProcessorEditor::PolyPitchAudioProcessorEditor(PolyPitchAudioProce
     addAndMakeVisible(traceView);
     traceView.onReadout = [this](double midi, bool inTune) { showReadout(midi, inTune); };
     traceView.onFollowChanged = [this] { refreshFollow(); };
+    traceView.onTransport = [this](bool available, bool playing)
+    {
+        if (playButton.isVisible() != available)
+        {
+            playButton.setVisible(available);
+            resized();
+        }
+        const auto label = playing ? "Stop" : "Play";
+        if (playButton.getButtonText() != label)
+            playButton.setButtonText(label);
+        const bool canClean = processor.hasCleanTrace();
+        if (cleanButton.isVisible() != canClean)
+        {
+            cleanButton.setVisible(canClean);
+            resized();
+        }
+        cleanButton.setToggleState(processor.view().clean, juce::dontSendNotification);
+    };
+    cleanButton.setTooltip("Show the cleaned-up trace, or everything as first heard");
+    cleanButton.onClick = [this] { processor.setCleanTrace(! processor.view().clean); };
+    addChildComponent(cleanButton);
+    traceView.onUseKey = [this](int root, bool minor) { setKey(root, minor ? "minor" : "major"); };
+    playButton.onClick = [this]
+    {
+        if (auto* host = processor.trackHost())
+            host->togglePlay();
+    };
+    addChildComponent(playButton);
+    processor.analyseTrackOnce();
 
     const auto& scales = polypitch::scales::all();
     scaleBox.addSectionHeading("Scales");
@@ -119,7 +148,7 @@ PolyPitchAudioProcessorEditor::PolyPitchAudioProcessorEditor(PolyPitchAudioProce
     // Setting the limits resizes us, which would overwrite the saved size.
     const int savedWidth = processor.view().width, savedHeight = processor.view().height;
     setResizable(true, true);
-    setResizeLimits(840, 320, 3000, 2000);
+    setResizeLimits(960, 320, 3000, 2000);
     setSize(savedWidth, savedHeight);
 }
 
@@ -233,6 +262,16 @@ void PolyPitchAudioProcessorEditor::resized()
     rootBox.setBounds(bar.removeFromLeft(66));
     bar.removeFromLeft(6);
     scaleBox.setBounds(bar.removeFromLeft(182));
+    if (playButton.isVisible())
+    {
+        bar.removeFromLeft(6);
+        playButton.setBounds(bar.removeFromLeft(56));
+    }
+    if (cleanButton.isVisible())
+    {
+        bar.removeFromLeft(6);
+        cleanButton.setBounds(bar.removeFromLeft(56));
+    }
 
     timeIn.setBounds(bar.removeFromRight(28));
     bar.removeFromRight(4);
