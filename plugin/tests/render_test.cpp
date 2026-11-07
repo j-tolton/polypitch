@@ -149,6 +149,46 @@ namespace
         }
     }
 
+    // The live engine, as the web app uses it. A note, plus a little sound an octave below it that
+    // isn't a note of its own, then the same with a real note there.
+    void falseOctave()
+    {
+        const auto strengthAt = [](const std::vector<float>& audio, double midi)
+        {
+            polypitch::Config config;
+            polypitch::Engine engine(config);
+            polypitch::Tracker tracker;
+            std::vector<double> cores;
+            for (size_t s = 0, k = 0; s + 8192 <= audio.size(); s += 1024, ++k)
+            {
+                engine.analyse(audio.data() + s, 8192);
+                const auto& ridges = tracker.track(engine.laneEvidence(), engine.lanePitch(), engine.laneCount(), k > 0, polypitch::ANY_NOTE);
+                if (k < 40)
+                    continue;
+                double core = 0.0;
+                for (const auto& r : ridges)
+                    if (std::abs(r.m - midi) < 0.4)
+                        core = juce::jmax(core, r.core);
+                cores.push_back(core);
+            }
+            std::sort(cores.begin(), cores.end());
+            return cores[cores.size() / 2];
+        };
+        const auto a4 = tone(48000.0, 3.0, 440.0), d4 = tone(48000.0, 3.0, 293.66), a3 = tone(48000.0, 3.0, 220.0);
+        std::vector<float> doubleStop(a4.size()), withFaint(a4.size()), withReal(a4.size());
+        for (size_t i = 0; i < a4.size(); ++i)
+        {
+            doubleStop[i] = a4[i] + d4[i];
+            const auto low = (float) std::sin(juce::MathConstants<double>::twoPi * 220.0 * (double) i / 48000.0);
+            withFaint[i] = doubleStop[i] + low * 0.04f;
+            withReal[i] = doubleStop[i] + a3[i];
+        }
+        const double faint = strengthAt(withFaint, 57.0), real = strengthAt(withReal, 57.0), upper = strengthAt(withFaint, 69.0), lower = strengthAt(withFaint, 62.0);
+        check(faint < 0.1, "a D4 + A4 double stop shows no false A3: " + juce::String(faint, 2));
+        check(upper > 0.5 && lower > 0.5, "while D4 and A4 stay strong: " + juce::String(lower, 2) + ", " + juce::String(upper, 2));
+        check(real > 0.5, "and a really played A3 still shows: " + juce::String(real, 2));
+    }
+
     void retint()
     {
         PolyPitchAudioProcessor p;
@@ -895,6 +935,7 @@ int main(int argc, char** argv)
     for (const auto& [rate, block] : std::vector<std::pair<double, int>> { { 44100.0, 512 }, { 48000.0, 256 }, { 88200.0, 1024 }, { 96000.0, 480 }, { 192000.0, 2048 } })
         toneAtRate(rate, block);
     retint();
+    falseOctave();
     if (argc == 2)
     {
         matchesEngine(juce::File(argv[1]));

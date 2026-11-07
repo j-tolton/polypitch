@@ -181,7 +181,10 @@ for(size_t i=0;i<midi.size();i++){
  // A real weak fundamental can be rescued by 2f plus odd harmonics.  A proposed
  // subharmonic supported only by even partials receives very little confidence.
  float identity=direct + odd*.82f;
- float family=direct*1.15f + odd + even*.62f;
+ // Even partials alone say nothing: they could all belong to a note an octave above. Without
+ // an odd partial they don't count, so faint energy below a note can't borrow its strength.
+ float evenTrust=std::clamp(odd/.1f,0.f,1.f);
+ float family=direct*1.15f + odd + even*.62f*evenTrust;
  float oddGate=std::clamp((identity-.018f)/.16f,0.f,1.f);
  float covGate=std::clamp((coverage-.20f)/1.15f,0.f,1.f);
  float score=family*(.22f+.78f*std::max(oddGate,covGate*.72f)) + direct*1.10f;
