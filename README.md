@@ -1,47 +1,80 @@
-# PolyPitch C++ / WASM - Milestone 1
+# PolyPitch
 
-Clean start for the analysis engine.
+A pitch trace and tuner for practising an instrument or singing. Play or sing, and the notes you produce are drawn as lines scrolling across a grid of note names. They turn green when they're in tune with the scale or arpeggio you're practising. More than one note at a time is followed, so double stops, chords and harmony parts show up as separate lines.
 
-This milestone deliberately stops at the observation layer: microphone PCM -> Hann FFT -> dense 10-cent local pitch evidence. It preserves the useful lesson from JS 1.7: no pitch is invented without local spectral evidence.
+It comes in two forms that share one analysis engine:
 
-It does **not** yet decide fundamental vs harmonic. That is the next layer.
+- **The web app** (`web/`), which works on a phone or computer and offline once opened. It's live at https://polypitch.pages.dev/.
+- **A VST3 plugin** (`plugin/`), which draws the same trace for a track in Reaper or another DAW. See [plugin/README.md](plugin/README.md).
 
-## Build
+## The web app
 
-Install/activate Emscripten, then:
+- **Trace.** Listen starts the microphone, and Stop then Listen carries on the same trace. Play plays back what was heard, and Clear starts again. You can also open a recording, or drop one on the page. Drag, scroll or pinch to move back through time and zoom in on pitch.
+- **Practise.** Choose a root note and a scale or arpeggio. Notes that belong to it are marked on the grid, and notes played in tune turn green.
+- **Instrument.** This sets the range shown and ignores sound below the instrument's lowest note. Clarinet, saxophones, trumpet and baritone can name notes as written on their music, or at concert pitch.
+- **Tuner.** The tuning-fork button opens a tuner that is always listening. It has three tabs:
+  - **Chromatic:** the nearest note on a sliding tape, with a strobe underneath for the last few cents.
+  - **Strings:** each string of the chosen tuning, ticked once it's in tune.
+  - **Strum:** reads every string from a single strum.
 
-    emcmake cmake -S . -B build
-    cmake --build build
+  The reference pitch (A = 440) can be moved up or down.
 
-The next milestone is temporal ridge/source inference: track coherent ridges, group harmonically co-moving ridges, let established sources explain their harmonics, and leave unexplained coherent ridges available as independent notes.
+The full controls are listed under Settings in the app.
 
-Regression targets:
-- sustained hum: one dominant source, harmonics subordinate
-- bass open G + 12/15 hammer-ons: follow played pitch
-- cello C2+G2 double stop: preserve both fundamentals
+### Files
 
-## 2.0 DSP regression test
-The pitch-evidence layer now has a native synthetic-signal regression harness.
-On a machine with a C++ compiler/CMake:
+| File | What it is |
+|---|---|
+| `index.html` | The whole app: page, styles and code |
+| `polypitch.js`, `polypitch.wasm` | The analysis engine, built from `dsp/` |
+| `audio-worklet.js` | Passes microphone audio to the page |
+| `strum.js` | Reads a strummed chord; also used by the strum tests |
+| `sw.js`, `manifest.webmanifest`, `icon-*.png` | Let it install as an app and work offline |
 
-    cmake -S . -B build-native
-    cmake --build build-native
-    ctest --test-dir build-native --output-on-failure
+### Deploying
 
-It covers a pure sine, harmonic-rich tones, weak-fundamental tones, an up/down glissando and a two-note polyphonic signal.
+Upload the `web` folder to Cloudflare Pages (drag and drop). There's no build step for the page itself. Only the engine is built, and `polypitch.js` and `polypitch.wasm` are committed already built.
 
+For local testing, serve `web/` from any static server. The microphone needs `localhost` or HTTPS.
 
-## 2.1 expanded DSP regression suite
+## The analysis engine
 
-2.1 deliberately tests the analyser before microphone testing. In addition to the 2.0 cases, the native suite now includes:
+`dsp/` is C++ shared by the web app and the plugin:
 
-- a long sustained, vibrato-like hold followed by a descending phrase;
-- intra-window up/down chirps, so pitch is moving during the ~171 ms FFT window rather than being stationary for each FFT;
-- a deliberately awkward formant-like spectrum with weak fundamental and stronger upper partials;
-- amplitude ramping during the post-hold descent;
-- an octave/subharmonic trap to ensure a real 196 Hz source is not incorrectly promoted to 98 Hz.
+- `polypitch.cpp`: turns audio into pitch evidence. It takes an 8192-point FFT every 1024 samples, then measures pitch in 10-cent lanes, grouping each note's harmonics so they aren't mistaken for extra notes.
+- `tracker.cpp`: links that evidence from frame to frame into ridges, one per note, and decides which are in tune.
+- `refine.cpp`, `dual_engine.h`: whole-track clean-up and the two-window analysis used by the plugin.
+- `wasm_api.cpp`: the functions the web app calls.
 
-The new chirp test exposed a real 2.0 failure: 195 -> 220 Hz was misidentified by about 7.1 semitones. The cause was harmonic association windows becoming progressively narrower for higher partials. That assumption is wrong for a moving source: a proportional pitch sweep smears every harmonic by roughly the same interval in cents. 2.1 therefore keeps the harmonic association width approximately constant in pitch space. The expanded suite passes after that change.
+### Building the WebAssembly
 
-## 2.4 diagnostic build
-This build intentionally keeps the 2.3 pitch-evidence algorithm unchanged and adds pipeline instrumentation. The on-screen diagnostic box shows frame counter, input RMS, raw spectral centroid, background/residual means, noise estimate, strongest evidence, raw peak count, strongest raw FFT components and strongest extracted peaks. Use **Export diagnostics** immediately after reproducing a freeze to save the retained diagnostic frames as CSV.
+Needs [Emscripten](https://emscripten.org/) at `C:\Development\emsdk`, plus CMake and Ninja.
+
+```
+build.bat
+```
+
+This builds into `build/` and copies `polypitch.js` and `polypitch.wasm` into `web/`.
+
+### Tests
+
+The native test feeds synthetic signals through the engine: sines, harmonic-rich and weak-fundamental tones, glides and two-note chords. It checks that each note is found at the right pitch and not an octave out.
+
+```
+cmake -S . -B build-native
+cmake --build build-native
+ctest --test-dir build-native --output-on-failure
+```
+
+The plugin has its own tests, described in its README.
+
+## Layout
+
+```
+web/      the web app
+dsp/      the shared analysis engine
+tests/    native engine tests
+plugin/   the VST3 plugin (JUCE)
+```
+
+Version history is in the commit log. `status.odt` holds early design notes and is out of date.
