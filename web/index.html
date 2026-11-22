@@ -51,14 +51,10 @@ body.tuning #start,body.tuning #play,body.tuning #clear,body.tuning #openRecordi
 .str .nudge{width:48px;min-height:22px;padding:0;font-size:11px;color:var(--muted)}.str .nudge[hidden]{display:none}
 .tMain{display:flex;align-items:baseline;justify-content:center;gap:4px;margin-top:auto;color:var(--muted);transition:color .12s;font-variant-numeric:tabular-nums}.tMain.live{color:var(--text)}.tMain.idle #tNote{font-size:40px;opacity:.35}.tMain.good{color:var(--accent)}
 #tNote{font-size:clamp(56px,24vmin,200px);font-weight:700;line-height:1}#tOct{font-size:clamp(20px,7vmin,60px);font-weight:600}
-.meter{position:relative;width:min(640px,100%);height:58px;flex:none}
-.meter .scale{position:absolute;left:0;right:0;top:12px;height:26px;border-radius:6px;background:repeating-linear-gradient(90deg,var(--line) 0 1px,transparent 1px 10%) 0 0/100% 100%,var(--panel);border:1px solid var(--line)}
-.meter .zone{position:absolute;left:45%;width:10%;top:12px;height:26px;background:#4cd97b33;border-left:1px solid #4cd97b88;border-right:1px solid #4cd97b88}
-.meter .needle{position:absolute;top:4px;left:50%;width:4px;height:42px;margin-left:-2px;border-radius:2px;background:var(--muted);transition:left .09s linear,background .12s,opacity .3s;opacity:0}.meter .needle.live{opacity:1;background:var(--text)}.meter .needle.good{background:var(--accent);box-shadow:0 0 12px var(--accent)}
-.meter .ends{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;color:var(--muted);font-size:11px}
+#tTape{width:min(640px,100%);height:84px;flex:none}#tStrobe{width:min(640px,100%);height:132px;flex:none}
 #tInfo{min-height:20px;color:var(--muted);font-size:15px;font-variant-numeric:tabular-nums;text-align:center}#tInfo b{color:var(--text);font-weight:600}
 #strumRow{display:none;gap:6px;justify-content:center;width:100%;max-width:640px;flex:1;min-height:150px}
-#tuner.strum #tStrings{flex:1}#tuner.strum #strumRow{display:flex}#tuner.strum #stringRow,#tuner.strum #editStrings,#tuner.strum #tMain,#tuner.strum .meter,#tuner.strum #tInfo{display:none}
+#tuner.strum #tStrings{flex:1}#tuner.strum #strumRow{display:flex}#tuner.strum #stringRow,#tuner.strum #editStrings,#tuner.strum #tMain,#tuner.strum #tTape,#tuner.strum #tStrobe,#tuner.strum #tInfo{display:none}
 .sc{flex:1;max-width:84px;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px}
 .sbar{position:relative;flex:1;width:100%;min-height:100px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
 .sbar::before{content:'';position:absolute;left:0;right:0;top:45%;height:10%;background:#4cd97b22;border-block:1px solid #4cd97b66}
@@ -67,7 +63,7 @@ body.tuning #start,body.tuning #play,body.tuning #clear,body.tuning #openRecordi
 .sname{font-size:17px;font-weight:600;line-height:1.1;text-align:center}.sname small{color:var(--muted);font-size:11px;font-weight:400}
 .scents{min-height:18px;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}.sc.good .sname,.sc.good .scents{color:var(--accent)}.sc.missing .sname{opacity:.4}
 #tHint{margin-bottom:auto;color:var(--muted);font-size:13px;text-align:center}
-@media(max-height:480px){#tuner{gap:6px;padding:8px 12px}.str>.sbtn{min-height:40px;font-size:15px}.meter{height:50px}#tuner.strings #tNote{font-size:clamp(48px,17vmin,120px)}#tuner.strings #tOct{font-size:clamp(16px,6vmin,40px)}}
+@media(max-height:480px){#tuner{gap:6px;padding:8px 12px}.str>.sbtn{min-height:40px;font-size:15px}#tTape{height:64px}#tStrobe{height:88px}#tuner.strings #tNote{font-size:clamp(48px,17vmin,120px)}#tuner.strings #tOct{font-size:clamp(16px,6vmin,40px)}}
 #debugBox{left:70px;top:12px;display:none;padding:7px 9px;font:11px/1.35 ui-monospace,Consolas,monospace;color:#a9c1cc;white-space:pre;pointer-events:none}#debugBox.on{display:block}
 @media(max-width:700px){
 header{gap:6px;padding-inline:8px}.brand,.spacer{display:none}header>*{flex:none}#openRecording{display:none}#keyBtn{flex:1;min-width:0}#keyBtn small{display:none}#keyLabel{overflow:hidden;text-overflow:ellipsis}#clear span{display:none}#clear{width:36px;padding:0}
@@ -97,7 +93,7 @@ header{gap:6px;padding-inline:8px}.brand,.spacer{display:none}header>*{flex:none
 <label class="row"><span>Audio input</span><select id="input"><option value="">System default</option></select></label>
 <label class="row"><span>Time shown</span><input id="hist" type="range" min="2" max="60" value="10"><output id="histv">10 s</output></label>
 <h3>Controls</h3>
-<dl class="help"><dt>Drag</dt><dd>Scroll through time or pitch</dd><dt>Wheel</dt><dd>Scroll pitch · Shift: time</dd><dt>Ctrl+wheel</dt><dd>Zoom pitch · Alt+wheel: zoom time</dd><dt>Keys</dt><dd>Arrows scroll · + − zoom · End: back to live</dd><dt>Touch</dt><dd>One finger scrolls · pinch zooms pitch · tap reads a note</dd><dt>Listen</dt><dd>Starts the microphone. Stop, then Listen again, carries on the same trace; Clear starts afresh</dd><dt>Play</dt><dd>Plays back what was heard, from where you tap or from the start of the view · Space starts and stops it · the bar below shows the whole session, green where it was in tune</dd><dt>Follow</dt><dd>On whenever you start or clear. Dragging the pitch view turns it off until then; tap Follow to turn it back on</dd><dt>Instrument</dt><dd>Frames its range, shades the rest and ignores anything below its lowest note. Trumpet, baritone, clarinet and saxophones can name notes as written on their music, or at concert pitch</dd><dt>Tuner</dt><dd>The tuning fork button switches to the tuner, which always listens and keeps nothing. Switching to it clears the trace; back in the trace, press Listen to start again. Chromatic shows the nearest note; Strings shows each string and ticks the ones in tune. Tap a string to tune only that one, or Edit to change a tuning. Strum reads every string at once: strum them all and let them ring for a second, then fine-tune any that are out on Strings</dd><dt>App</dt><dd>Add to Home Screen from your browser's menu to run it full screen like an app. It works offline once it has been opened online.</dd></dl>
+<dl class="help"><dt>Drag</dt><dd>Scroll through time or pitch</dd><dt>Wheel</dt><dd>Scroll pitch · Shift: time</dd><dt>Ctrl+wheel</dt><dd>Zoom pitch · Alt+wheel: zoom time</dd><dt>Keys</dt><dd>Arrows scroll · + − zoom · End: back to live</dd><dt>Touch</dt><dd>One finger scrolls · pinch zooms pitch · tap reads a note</dd><dt>Listen</dt><dd>Starts the microphone. Stop, then Listen again, carries on the same trace; Clear starts afresh</dd><dt>Play</dt><dd>Plays back what was heard, from where you tap or from the start of the view · Space starts and stops it · the bar below shows the whole session, green where it was in tune</dd><dt>Follow</dt><dd>On whenever you start or clear. Dragging the pitch view turns it off until then; tap Follow to turn it back on</dd><dt>Instrument</dt><dd>Frames its range, shades the rest and ignores anything below its lowest note. Trumpet, baritone, clarinet and saxophones can name notes as written on their music, or at concert pitch</dd><dt>Tuner</dt><dd>The tuning fork button switches to the tuner, which always listens and keeps nothing. Switching to it clears the trace; back in the trace, press Listen to start again. Chromatic shows the nearest note on a sliding tape: bring it to the middle line. The stripes below are a strobe for the last few cents: each row is the note or one of its overtones, and it stands still, green, when that one is in tune. Drifting right is sharp, left is flat; Strings shows each string and ticks the ones in tune. Tap a string to tune only that one, or Edit to change a tuning. Strum reads every string at once: strum them all and let them ring for a second, then fine-tune any that are out on Strings</dd><dt>App</dt><dd>Add to Home Screen from your browser's menu to run it full screen like an app. It works offline once it has been opened online.</dd></dl>
 <h3>Advanced</h3>
 <label class="row"><span>Show faint evidence</span><input id="view" type="checkbox"></label>
 <label class="row"><span>Show diagnostics</span><input id="diag" type="checkbox"></label>
@@ -110,7 +106,7 @@ header{gap:6px;padding-inline:8px}.brand,.spacer{display:none}header>*{flex:none
 <div class="refStep"><button id="refDown" aria-label="Lower the reference">−</button><span id="refLabel">A = 440</span><button id="refUp" aria-label="Raise the reference">+</button></div></div>
 <div id="tStrings" hidden><div class="tuningRow"><select id="tuningSel" aria-label="Tuning"></select><button id="editStrings" aria-pressed="false">Edit</button></div><div id="stringRow"></div><div id="strumRow"></div></div>
 <div class="tMain" id="tMain"><span id="tNote">—</span><span id="tOct"></span></div>
-<div class="meter"><div class="scale"></div><div class="zone"></div><div class="needle" id="tNeedle"></div><div class="ends"><span>−50¢ flat</span><span>sharp +50¢</span></div></div>
+<canvas id="tTape" aria-hidden="true"></canvas><canvas id="tStrobe" aria-hidden="true"></canvas>
 <div id="tInfo"></div><div id="tHint"></div><button id="tRetry" hidden>Try again</button>
 </div>
 <div id="hint"><strong>Press Listen and play a note</strong><span>or drop a recording here</span></div>
@@ -126,7 +122,7 @@ header{gap:6px;padding-inline:8px}.brand,.spacer{display:none}header>*{flex:none
 (async()=>{'use strict';
 const $=s=>document.querySelector(s),debugBox=$('#debugBox'),debugExport=$('#debugExport'),pcmExport=$('#pcmExport'),cv=$('#plot'),ctx=cv.getContext('2d'),stage=$('#stage'),start=$('#start'),playBtn=$('#play'),hist=$('#hist'),histv=$('#histv'),view=$('#view'),follow=$('#follow'),input=$('#input'),openBtn=$('#openRecording'),recFile=$('#recFile'),status=$('#status'),readout=$('#readout'),hint=$('#hint'),keyBtn=$('#keyBtn'),keyLabel=$('#keyLabel'),keyPanel=$('#keyPanel'),settingsBtn=$('#settingsBtn'),settingsPanel=$('#settingsPanel'),diag=$('#diag');
 let M;try{M=await createPolyPitch();if(typeof M._pp_lane_count!=='function'||typeof M._pp_lane_midi!=='function'||typeof M._pp_lane_evidence!=='function'||typeof M._pp_lane_pitch!=='function'||typeof M._pp_input_rms!=='function'||typeof M._pp_debug_top_hz!=='function'||typeof M._pp_track!=='function')throw new Error('WASM/UI mismatch');status.textContent='';start.disabled=false}catch(e){console.error(e);status.textContent='Could not load the audio engine';return}
-const FFT=8192,HOP=1024,RIDGE_REACH=.45,RIDGE_STRONG=.25,DOT_SPACING=1.2,DOT_ALPHA=.34,DOT_RADIUS=7,TINT_LEVELS=12,AGE_FULL=5,HISTORY_MS=300000,SPAN_MIN=6,SPAN_MAX=60,START_SPAN=30,START_CENTRE=57,FOLLOW_AGE=8,FOLLOW_CORE=.6,FOLLOW_TAU_MS=250,LANE_MIN=26,LANE_STEP=.10,OFF_PITCH_RGB=[112,142,168],IN_TUNE_RGB=[66,255,118],OFF_PITCH_GAIN=.46,ring=new Float32Array(FFT),VERSION='6.9';
+const FFT=8192,HOP=1024,RIDGE_REACH=.45,RIDGE_STRONG=.25,DOT_SPACING=1.2,DOT_ALPHA=.34,DOT_RADIUS=7,TINT_LEVELS=12,AGE_FULL=5,HISTORY_MS=300000,SPAN_MIN=6,SPAN_MAX=60,START_SPAN=30,START_CENTRE=57,FOLLOW_AGE=8,FOLLOW_CORE=.6,FOLLOW_TAU_MS=250,LANE_MIN=26,LANE_STEP=.10,OFF_PITCH_RGB=[112,142,168],IN_TUNE_RGB=[66,255,118],OFF_PITCH_GAIN=.46,ring=new Float32Array(FFT),VERSION='6.10';
 const SHARPS=['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'],FLATS=['C','D♭','D','E♭','E','F','G♭','G','A♭','A','B♭','B'],COMMON_ROOTS=['C','D♭','D','E♭','E','F','F♯','G','A♭','A','B♭','B'];
 // rel is the distance to the relative major, which decides whether a key is spelled with flats.
 const SCALES=[
@@ -215,6 +211,7 @@ function push(msg){if(!running)return;
  const a=msg.samples||msg,workletFrame=(msg.frame==null?null:msg.frame);
  workletBlocks++;
  if(tunerOpen&&tunerMode==='strum'){strumFeed(a);return}
+ if(tunerOpen)strobeFeed(a);
  // The tuner only listens: nothing it hears is kept.
  if(!tunerOpen){keepAudio(a,workletFrame);pcmTotal+=a.length}
  for(const v of a){ring[write]=v;write=(write+1)%FFT;filled=Math.min(FFT,filled+1);samplesSinceAnalysis++}
@@ -502,7 +499,7 @@ function anim(ms){
   lo=nc-span/2;hi=nc+span/2;needsDraw=true;
  }
  if(replayPlaying()){followReplay();needsDraw=true}
- if(tunerOpen){tunerIdle(performance.now());return}
+ if(tunerOpen){tunerIdle(performance.now());drawTape(dt);drawStrobe(dt);return}
  if(needsDraw||(running&&reviewEnd==null))present();
 }
 function savedInput(){try{return localStorage.getItem('polypitch-input')||''}catch(e){return ''}}
@@ -816,7 +813,7 @@ instrumentSel.onchange=()=>setInstrument(INSTRUMENTS.find(x=>x.id===instrumentSe
 // ---------- Tuner ----------
 // Chromatic shows the nearest note. Strings shows a tuning's strings, finds the one being played
 // (or the one you've picked) and ticks each once it has held in tune.
-const tunerEl=$('#tuner'),tunerBtn=$('#tunerBtn'),tNote=$('#tNote'),tOct=$('#tOct'),tMain=$('#tMain'),tNeedle=$('#tNeedle'),tInfo=$('#tInfo'),tHint=$('#tHint'),tuningSel=$('#tuningSel'),stringRow=$('#stringRow'),editBtn=$('#editStrings'),overviewEl=$('#overview');
+const tunerEl=$('#tuner'),tunerBtn=$('#tunerBtn'),tNote=$('#tNote'),tOct=$('#tOct'),tMain=$('#tMain'),tInfo=$('#tInfo'),tHint=$('#tHint'),tuningSel=$('#tuningSel'),stringRow=$('#stringRow'),editBtn=$('#editStrings'),overviewEl=$('#overview');
 const IN_TUNE_CENTS=5,OUT_CENTS=15,HOLD_MS=500,LOST_MS=900,SMOOTH_MS=140;
 let tunerLastT=null,tunerOpen=false,tunerMode='chromatic',refHz=440,tuningKey='guitar:0',customTuning=null,editing=false,lockedString=-1;
 let tSmooth=null,tLastMs=0,tLastFeed=0,tHeldSince=0,tHeldString=-1,tActive=-1;const tuned=new Set();
@@ -910,7 +907,7 @@ function tunerFeed(rs,now){
 function tunerIdle(ms){if(tSmooth&&ms-tLastMs>LOST_MS){tSmooth=null;showTuner(null)}}
 function showTuner(t,ms){
  if(!t){
-  tMain.className='tMain idle';tNeedle.className='needle';tInfo.textContent='';
+  tMain.className='tMain idle';tInfo.textContent='';tapeLive=false;
   if(tunerMode==='strum'){tHint.textContent=strumHint();return}
   if(tunerMode==='strings'){tNote.textContent='—';tOct.textContent='';tActive=-1;renderStrings()}else{tNote.textContent='—';tOct.textContent=''}
   tHint.textContent=!running?(micError||'Starting the microphone…'):tunerMode==='strings'?(tuned.size&&tuned.size>=currentTuning().notes.length?'All in tune':'Play one string at a time'):'Play a note';
@@ -923,7 +920,8 @@ function showTuner(t,ms){
  // Chromatic names the note as written for the instrument, and gives its concert name too.
  const shown=t.string<0?target+transpose:target;
  tNote.textContent=(names===FLATS&&t.string<0?FLATS:SHARPS)[(shown%12+12)%12];tOct.textContent=Math.floor(shown/12)-1;
- tMain.className='tMain live'+(good?' good':'');tNeedle.className='needle live'+(good?' good':'');tNeedle.style.left=`${50+c}%`;
+ tMain.className='tMain live'+(good?' good':'');
+ tapeLive=true;tapeGood=good;tapeWant=t.string<0?t.m+transpose:t.m;tapeTarget=shown;tapeFlats=names===FLATS&&t.string<0;strobeAim(target);
  const hz=refHz*Math.pow(2,(t.m-69)/12),cr=Math.round(cents);
  tInfo.innerHTML=`<b>${cr>0?'+':''}${cr}¢</b> · ${hz.toFixed(1)} Hz${transpose&&t.string<0?` · concert ${FLATS[(target%12+12)%12]}${Math.floor(target/12)-1}`:''}`;
  if(t.string>=0){
@@ -933,6 +931,127 @@ function showTuner(t,ms){
   else{tHeldString=-1;if(Math.abs(cents)>OUT_CENTS)untickString(t.string,target)}
   tHint.textContent=good?'In tune':cents<0?'Flat · tune up':'Sharp · tune down';renderStrings();
  }else tHint.textContent=good?'In tune':cents<0?'Flat':'Sharp';
+}
+// ---------- Tape and strobe ----------
+// The tape: note names slide past a fixed line, so the way to go shows before you get there. Two and a
+// half semitones either side, a tick every ten cents, the green band is in tune.
+const tapeEl=$('#tTape'),strobeEl=$('#tStrobe'),tapeG=tapeEl.getContext('2d'),strobeG=strobeEl.getContext('2d');
+let tapeLive=false,tapeGood=false,tapeWant=null,tapeAt=null,tapeTarget=null,tapeFlats=false,tapeFade=0,colours=null,coloursAt=0;
+function palette(){
+ const now=performance.now();if(colours&&now-coloursAt<1000)return colours;
+ const cs=getComputedStyle(document.documentElement),v=n=>cs.getPropertyValue(n).trim();coloursAt=now;
+ return colours={accent:v('--accent'),text:v('--text'),muted:v('--muted'),line:v('--line'),panel:v('--panel')};
+}
+function fitCanvas(el,g){
+ const r=el.getBoundingClientRect(),w=Math.max(1,Math.round(r.width*dpr)),h=Math.max(1,Math.round(r.height*dpr));
+ if(el.width!==w||el.height!==h){el.width=w;el.height=h}
+ g.setTransform(dpr,0,0,dpr,0,0);return [r.width,r.height];
+}
+function roundRect(g,x,y,w,h,r){g.beginPath();g.roundRect?g.roundRect(x,y,w,h,r):g.rect(x,y,w,h)}
+function drawTape(dt){
+ if(!tapeEl.offsetParent)return;
+ const [W,H]=fitCanvas(tapeEl,tapeG),g=tapeG,c=palette();
+ if(tapeLive&&tapeWant!=null){
+  // Glide, but jump when it's a different note altogether.
+  if(tapeAt==null||Math.abs(tapeWant-tapeAt)>3)tapeAt=tapeWant;else tapeAt+=(tapeWant-tapeAt)*(1-Math.exp(-dt/70));
+ }
+ tapeFade+=((tapeLive?1:.35)-tapeFade)*(1-Math.exp(-dt/150));
+ g.clearRect(0,0,W,H);
+ roundRect(g,.5,.5,W-1,H-1,8);g.fillStyle=c.panel;g.fill();g.strokeStyle=c.line;g.lineWidth=1;g.stroke();
+ const px=W/5,mid=W/2,at=tapeAt==null?null:tapeAt;
+ // The in-tune band and the line to aim for.
+ g.fillStyle=tapeGood&&tapeLive?c.accent+'40':c.accent+'22';g.fillRect(mid-px*.05,1,px*.1,H-2);
+ g.save();roundRect(g,1,1,W-2,H-2,7);g.clip();
+ if(at!=null){
+  g.globalAlpha=tapeFade;
+  const first=Math.ceil((at-2.7)*10),last=Math.floor((at+2.7)*10);
+  for(let i=first;i<=last;i++){
+   const m=i/10,x=mid+(m-at)*px,whole=i%10===0;
+   g.strokeStyle=whole?c.text:c.muted;g.lineWidth=whole?2:1;g.globalAlpha=tapeFade*(whole?.9:i%5===0?.6:.35);
+   const len=whole?H*.22:i%5===0?H*.14:H*.09;
+   g.beginPath();g.moveTo(x,1);g.lineTo(x,1+len);g.moveTo(x,H-1);g.lineTo(x,H-1-len);g.stroke();
+   if(whole){
+    const n=Math.round(m),on=n===tapeTarget&&tapeLive,nm=(tapeFlats?FLATS:SHARPS)[(n%12+12)%12],oct=Math.floor(n/12)-1;
+    const big=on?Math.min(34,H*.42):Math.min(22,H*.28);
+    g.globalAlpha=tapeFade*(on?1:Math.max(.25,.8-Math.abs(m-at)*.22));
+    g.fillStyle=on&&tapeGood?c.accent:on?c.text:c.muted;g.textBaseline='middle';
+    g.font=`${on?700:600} ${big}px system-ui,sans-serif`;const w1=g.measureText(nm).width;
+    g.font=`600 ${big*.5}px system-ui,sans-serif`;const w2=g.measureText(oct).width;
+    g.font=`${on?700:600} ${big}px system-ui,sans-serif`;g.fillText(nm,x-(w1+w2)/2,H/2);
+    g.font=`600 ${big*.5}px system-ui,sans-serif`;g.fillText(oct,x-(w1+w2)/2+w1+1,H/2+big*.22);
+   }
+  }
+  g.globalAlpha=1;
+ }
+ g.restore();
+ // The fixed line, with markers top and bottom; a gap leaves the note name clear.
+ const col=tapeLive?(tapeGood?c.accent:c.text):c.muted;
+ g.strokeStyle=col;g.lineWidth=2;g.beginPath();g.moveTo(mid,0);g.lineTo(mid,H*.27);g.moveTo(mid,H*.73);g.lineTo(mid,H);g.stroke();
+ g.fillStyle=col;const tw=7;
+ for(const [y,d] of [[0,1],[H,-1]]){g.beginPath();g.moveTo(mid-tw,y);g.lineTo(mid+tw,y);g.lineTo(mid,y+d*tw*1.1);g.closePath();g.fill()}
+}
+// The strobe: each row is the note or one of its overtones, mixed down against where it should be. The
+// stripes stand still when it's exactly there and drift right when sharp, left when flat, faster the
+// further out; the overtones drift faster than the note, so they show the last cent or two.
+const STROBE_K=[1,2,3,4],STROBE_TAU=.012,STROBE_P=44;
+let sbHz=0,sbTarget=null,sbRef=0,sbSr=0,sbA=0,sbRows=STROBE_K.map(()=>({c:1,s:0,cd:1,sd:0,r1:0,i1:0,r2:0,i2:0,ph:null,rate:0,amp:0,rateOk:false})),sbPatterns=null,sbFade=0;
+function strobeAim(target){
+ if(target===sbTarget&&refHz===sbRef)return;sbTarget=target;sbRef=refHz;sbHz=0;
+}
+function strobeFeed(a){
+ if(sbTarget==null||!ac)return;
+ const sr=ac.sampleRate;
+ if(!sbHz||sbSr!==sr){
+  sbSr=sr;sbHz=refHz*2**((sbTarget-69)/12);sbA=1-Math.exp(-1/(STROBE_TAU*sr));
+  for(let j=0;j<STROBE_K.length;j++){const o=sbRows[j],w=2*Math.PI*STROBE_K[j]*sbHz/sr;Object.assign(o,{c:1,s:0,cd:Math.cos(w),sd:Math.sin(w),r1:0,i1:0,r2:0,i2:0,ph:null,rate:0,amp:0,rateOk:false})}
+ }
+ const A=sbA;
+ for(let j=0;j<sbRows.length;j++){
+  const o=sbRows[j];if(STROBE_K[j]*sbHz>sr*.45)continue;
+  let {c,s:sn,cd,sd,r1,i1,r2,i2}=o;
+  for(let n=0;n<a.length;n++){
+   const x=a[n];r1+=A*(x*c-r1);i1+=A*(-x*sn-i1);r2+=A*(r1-r2);i2+=A*(i1-i2);
+   const t=c*cd-sn*sd;sn=sn*cd+c*sd;c=t;
+  }
+  const g=1/Math.hypot(c,sn);o.c=c*g;o.s=sn*g;o.r1=r1;o.i1=i1;o.r2=r2;o.i2=i2;
+ }
+}
+function strobePatterns(c){
+ // One period of soft stripes, in plain and in-tune colours.
+ const make=col=>{const cv=document.createElement('canvas'),P=Math.round(STROBE_P*dpr);cv.width=P;cv.height=1;const g=cv.getContext('2d'),gr=g.createLinearGradient(0,0,P,0);
+  gr.addColorStop(0,'transparent');gr.addColorStop(.3,col);gr.addColorStop(.5,col);gr.addColorStop(.8,'transparent');gr.addColorStop(1,'transparent');g.fillStyle=gr;g.fillRect(0,0,P,1);return cv};
+ return {key:c.accent+c.text+dpr,plain:make(c.text),good:make(c.accent)};
+}
+function drawStrobe(dt){
+ if(!strobeEl.offsetParent)return;
+ const [W,H]=fitCanvas(strobeEl,strobeG),g=strobeG,c=palette();
+ if(!sbPatterns||sbPatterns.key!==c.accent+c.text+dpr)sbPatterns=strobePatterns(c);
+ sbFade+=((tapeLive?1:0)-sbFade)*(1-Math.exp(-dt/200));
+ g.clearRect(0,0,W,H);
+ const rows=sbRows.length,gap=4,foot=14,rh=(H-foot-gap*(rows-1))/rows,lab=40,right=34,bx=lab,bw=W-lab-right;
+ let loudest=0;for(const o of sbRows)o.amp=Math.hypot(o.r2,o.i2),loudest=Math.max(loudest,o.amp);
+ g.textBaseline='middle';
+ for(let j=0;j<rows;j++){
+  const o=sbRows[j],k=STROBE_K[j],y=j*(rh+gap),h=rh;
+  // Its phase now, how fast that's turning, and so how far out it is.
+  const ph=Math.atan2(o.i2,o.r2),present=sbHz&&k*sbHz<=sbSr*.45&&loudest>1e-5&&o.amp>loudest*.12&&tapeLive;
+  if(o.ph!=null&&dt>0){let d=ph-o.ph;d-=2*Math.PI*Math.round(d/(2*Math.PI));const rate=d/(2*Math.PI)/(dt/1000);o.rate+=(rate-o.rate)*(1-Math.exp(-dt/(o.rateOk?300:60)));o.rateOk=true}
+  o.ph=ph;
+  const cents=sbHz?1200*Math.log2(1+o.rate/(k*sbHz)):0,good=present&&Math.abs(cents)<=IN_TUNE_CENTS;
+  roundRect(g,bx+.5,y+.5,bw-1,h-1,5);g.fillStyle=c.panel;g.fill();g.strokeStyle=good?c.accent+'99':c.line;g.lineWidth=1;g.stroke();
+  if(present){
+   g.save();roundRect(g,bx+1,y+1,bw-2,h-2,4);g.clip();
+   const pat=g.createPattern(good?sbPatterns.good:sbPatterns.plain,'repeat'),off=(ph/(2*Math.PI))*STROBE_P;
+   pat.setTransform(new DOMMatrix().scale(1/dpr,1).translate(off*dpr,0));
+   g.globalAlpha=sbFade*Math.min(1,.35+.65*o.amp/loudest);g.fillStyle=pat;g.fillRect(bx,y,bw,h);g.restore();g.globalAlpha=1;
+  }
+  // Which note the row is, and what to do.
+  const n=tapeTarget==null?null:tapeTarget+Math.round(12*Math.log2(k)),nm=n==null?'':(tapeFlats?FLATS:SHARPS)[(n%12+12)%12]+(Math.floor(n/12)-1);
+  g.globalAlpha=Math.max(.3,sbFade);g.fillStyle=good?c.accent:c.muted;g.font=`${k===1?600:400} 13px system-ui,sans-serif`;g.textAlign='left';g.fillText(nm,2,y+h/2);
+  g.textAlign='center';g.font='700 17px system-ui,sans-serif';g.fillStyle=good?c.accent:c.text;
+  if(present&&good)g.fillText('✓',W-right/2,y+h/2);else if(present){const ax=W-right/2,ay=y+h/2,d=cents>0?1:-1,a=Math.min(7,h*.32);g.beginPath();g.moveTo(ax-a,ay-d*a*.2);g.lineTo(ax+a,ay-d*a*.2);g.lineTo(ax,ay+d*a);g.closePath();g.fill();g.fillRect(ax-a*.32,ay-d*a*.2-d*a*.9,a*.64,d*a*.9)}g.globalAlpha=1;
+ }
+ g.fillStyle=c.muted;g.font='11px system-ui,sans-serif';g.textAlign='left';g.fillText('← flat',bx,H-foot/2+1);g.textAlign='right';g.fillText('sharp →',bx+bw,H-foot/2+1);g.textAlign='left';
 }
 // ---------- Strum ----------
 // Every string at once. Finding strums and reading them is in strum.js, shared with the tests; the last
