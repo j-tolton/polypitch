@@ -106,6 +106,8 @@ TraceView::TraceView(PolyPitchAudioProcessor& p) : processor(p)
         const auto guess = processor.keyGuess();
         if (guess.found && onUseKey != nullptr)
             onUseKey(guess.root, guess.minor);
+        if (const double hz = suggestedReference(); hz > 0.0 && onUseTuning != nullptr)
+            onUseTuning(hz);
     };
     addChildComponent(keyButton);
     applySettings();
@@ -405,6 +407,17 @@ void TraceView::tickTimeline(double now)
     wasAnalysing = analysing;
 }
 
+double TraceView::suggestedReference() const
+{
+    // Only worth saying when the notes agree with each other and it's more than a hair out.
+    const auto guess = processor.keyGuess();
+    if (! guess.found || guess.tuningFocus < 0.2 || std::abs(guess.tuningCents) < 4.0 || std::abs(guess.tuningCents) > 30.0)
+        return 0.0;
+    const double hz = (double) juce::roundToInt(440.0 * std::pow(2.0, guess.tuningCents / 1200.0));
+    // Nothing to suggest once it's what you're using.
+    return std::abs(hz - processor.view().referenceHz) < 0.5 ? 0.0 : hz;
+}
+
 void TraceView::updateKeyButton()
 {
     // Offered until you've chosen a scale, and not after.
@@ -418,9 +431,8 @@ void TraceView::updateKeyButton()
             return juce::String::fromUTF8(polypitch::scales::noteName(root, polypitch::scales::usesFlats(root, scale))) + (minor ? " minor" : " major");
         };
         auto text = "Sounds like " + keyName(guess.root, guess.minor) + " (or " + keyName(guess.nextRoot, guess.nextMinor) + "). Use it";
-        // Only worth saying when the notes agree with each other and it's more than a hair out.
-        if (guess.tuningFocus >= 0.2 && std::abs(guess.tuningCents) >= 4.0 && std::abs(guess.tuningCents) <= 30.0)
-            text = "A=" + juce::String(juce::roundToInt(440.0 * std::pow(2.0, guess.tuningCents / 1200.0))) + "   " + text;
+        if (const double hz = suggestedReference(); hz > 0.0)
+            text = "Tuned to A=" + juce::String((int) hz) + ". " + text.replace("Use it", "Use both");
         if (text != keyButtonFor)
         {
             keyButtonFor = text;
@@ -460,6 +472,16 @@ void TraceView::tick()
     }
     liveButton.setButtonText(onTimeline ? "Back to playhead" : "Back to live");
     updateKeyButton();
+
+    // Other tracks changing, while they analyse, means redrawing their lines.
+    double seen = 0.0;
+    for (auto* other : processor.otherInstances())
+        seen += other->traceGeneration() * 1000.0 + other->analysisProgress();
+    if (seen != othersSeen)
+    {
+        othersSeen = seen;
+        needsDraw = true;
+    }
 
     {
         const std::lock_guard<std::mutex> lock(processor.traceLock());
@@ -555,11 +577,13 @@ void TraceView::paintGrid(juce::Graphics& g) const
     const int width = getWidth();
     const double step = getHeight() / span, zone = juce::jmax(1.0, step * 0.15);
     const bool hasTargets = targetBits != polypitch::ANY_NOTE;
+    // With a reference other than A=440, the note lines move to where its notes are.
+    const double offset = processor.pitchOffset();
 
-    for (int m = (int) std::ceil(lo); m <= hi; ++m)
+    for (int m = (int) std::ceil(lo - offset); m <= hi - offset; ++m)
     {
         const int pc = ((m % 12) + 12) % 12;
-        const double y = yFor(m);
+        const double y = yFor(m + offset);
         const auto labelArea = juce::Rectangle<float>(10.0f, (float) y - 9.0f, 50.0f, 18.0f);
         if (hasTargets)
         {
@@ -889,6 +913,34 @@ void TraceView::paintTimeAxis(juce::Graphics& g, double now) const
     g.setFont(polypitch::style::font(11.0f));
     g.setColour(juce::Colour(0xff778991));
 
+    if (processor.isTimeline() && ! barLines.empty())
+    {
+        // Bar numbers, as on Reaper's ruler, spaced out when they'd crowd.
+        double barGap = 1.0e9, lastBar = -1.0;
+        for (const auto& line : barLines)
+            if (line.barStart)
+            {
+                const double x = plotLeft + (line.seconds * 1000.0 - (now - sec * 1000.0)) / (sec * 1000.0) * usable;
+                if (lastBar >= 0.0)
+                    barGap = juce::jmin(barGap, x - lastBar);
+                lastBar = x;
+            }
+        int every = 1;
+        while (barGap * every < 36.0 && every < 4096)
+            every *= 2;
+        for (const auto& line : barLines)
+        {
+            if (! line.barStart || (line.bar - 1) % every != 0)
+                continue;
+            const double x = plotLeft + (line.seconds * 1000.0 - (now - sec * 1000.0)) / (sec * 1000.0) * usable;
+            if (x < 70.0 || x > getWidth() - 20.0)
+                continue;
+            g.fillRect((float) x, (float) getHeight() - 4.0f, 1.0f, 4.0f);
+            g.drawText(juce::String(line.bar), juce::Rectangle<float>((float) x - 30.0f, (float) getHeight() - 20.0f, 60.0f, 15.0f), juce::Justification::centred, false);
+        }
+        return;
+    }
+
     if (processor.isTimeline())
     {
         // Project time, matching Reaper's ruler.
@@ -971,15 +1023,103 @@ void TraceView::paintStatus(juce::Graphics& g) const
     g.drawText(text, area.reduced(10.0f, 0.0f), juce::Justification::centredLeft, true);
 }
 
+void TraceView::paintBars(juce::Graphics& g, double now)
+{
+    // The project's bars, and its beats when they're far enough apart to read.
+    barLines.clear();
+    auto* host = processor.trackHost();
+    if (host == nullptr || ! processor.isTimeline())
+        return;
+    const int usable = getWidth() - plotLeft - plotRightGap;
+    host->gridLines((now - seconds * 1000.0) / 1000.0, now / 1000.0, seconds <= 30.0, barLines);
+    int beats = 0;
+    for (const auto& line : barLines)
+        if (! line.barStart)
+            ++beats;
+    const bool showBeats = beats > 0 && usable / (double) beats >= 8.0;
+    for (const auto& line : barLines)
+    {
+        if (! line.barStart && ! showBeats)
+            continue;
+        const double x = plotLeft + (line.seconds * 1000.0 - (now - seconds * 1000.0)) / (seconds * 1000.0) * usable;
+        g.setColour(rgba(200, 212, 218, line.barStart ? 0.13f : 0.045f));
+        g.fillRect((float) x, 0.0f, 1.0f, (float) getHeight());
+    }
+}
+
+void TraceView::paintOthers(juce::Graphics& g, double now)
+{
+    // Other PolyPitch tracks, each in its own colour, so parts can be read against each other.
+    othersShown = 0;
+    if (! processor.view().showOthers || ! processor.isTimeline())
+        return;
+    static const juce::Colour palette[] { juce::Colour(0xffe8b04a), juce::Colour(0xffb48cf2), juce::Colour(0xfff07a7a), juce::Colour(0xff5ab8f0) };
+    const int usable = getWidth() - plotLeft - plotRightGap;
+    const double from = now - seconds * 1000.0;
+    const auto xFor = [&](double ms) { return (float) (plotLeft + (ms - from) / (seconds * 1000.0) * usable); };
+    std::vector<std::pair<juce::String, juce::Colour>> legend;
+
+    juce::Graphics::ScopedSaveState save(g);
+    g.reduceClipRegion(plotLeft, 0, usable, getHeight());
+    for (auto* other : processor.otherInstances())
+    {
+        if (! other->isTimeline() || ! other->hasCleanTrace())
+            continue;
+        const auto colour = palette[(size_t) other->colourIndex() % 4];
+        const std::lock_guard<std::mutex> lock(other->traceLock());
+        const auto& f = other->traceFrames();
+        size_t i = 0, high = f.size();
+        while (i < high)
+        {
+            const size_t mid = (i + high) / 2;
+            if (f[mid].timeMs < from - 200.0) i = mid + 1; else high = mid;
+        }
+        for (; i < f.size() && f[i].timeMs <= now + 200.0; ++i)
+        {
+            const float x = xFor(f[i].timeMs), xp = i > 0 ? xFor(f[i - 1].timeMs) : x;
+            for (const auto& r : f[i].ridges)
+            {
+                if (r.core < 0.2)
+                    continue;
+                g.setColour(colour.withAlpha((float) juce::jmin(0.9, 0.25 + 0.7 * r.core)));
+                if (r.hasPrev)
+                    g.drawLine(xp, (float) yFor(r.prev), x, (float) yFor(r.m), 2.0f);
+                else
+                    g.fillEllipse(x - 1.5f, (float) yFor(r.m) - 1.5f, 3.0f, 3.0f);
+            }
+        }
+        legend.push_back({ other->trackTitle(), colour });
+        ++othersShown;
+    }
+
+    float y = (float) getHeight() - 40.0f;
+    g.setFont(polypitch::style::font(12.0f));
+    for (const auto& [name, colour] : legend)
+    {
+        g.setColour(colour);
+        g.fillRoundedRectangle((float) plotLeft + 10.0f, y + 4.0f, 14.0f, 4.0f, 2.0f);
+        g.setColour(juce::Colour(0xffc8d4da));
+        g.drawText(name, juce::Rectangle<float>((float) plotLeft + 30.0f, y - 2.0f, 220.0f, 16.0f), juce::Justification::centredLeft, true);
+        y -= 18.0f;
+    }
+}
+
 void TraceView::paint(juce::Graphics& g)
 {
     const double started = nowMs();
     const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
     paintGrid(g);
+    const double now = displayTime();
+    paintBars(g, now);
+    if (std::abs(processor.pitchOffset()) > 1.0e-6)
+    {
+        g.setColour(juce::Colour(0xff778991));
+        g.setFont(polypitch::style::font(11.0f));
+        g.drawText("A=" + juce::String(processor.view().referenceHz, 0), juce::Rectangle<float>(10.0f, (float) getHeight() - 20.0f, 50.0f, 14.0f), juce::Justification::centredLeft, false);
+    }
 
     {
         const std::lock_guard<std::mutex> lock(processor.traceLock());
-        const double now = displayTime();
         paintTiles(g, now, scale);
         paintTimeAxis(g, now);
         if (processor.isTimeline())
@@ -994,6 +1134,7 @@ void TraceView::paint(juce::Graphics& g)
             g.drawText("Play the track and its notes will appear here", getLocalBounds().withTrimmedLeft(plotLeft), juce::Justification::centred, false);
         }
     }
+    paintOthers(g, now);
     paintMs = nowMs() - started;
 }
 

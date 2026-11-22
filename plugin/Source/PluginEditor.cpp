@@ -89,18 +89,17 @@ PolyPitchAudioProcessorEditor::PolyPitchAudioProcessorEditor(PolyPitchAudioProce
         const auto label = playing ? "Stop" : "Play";
         if (playButton.getButtonText() != label)
             playButton.setButtonText(label);
-        const bool canClean = processor.hasCleanTrace();
-        if (cleanButton.isVisible() != canClean)
+        if (viewButton.isVisible() != available)
         {
-            cleanButton.setVisible(canClean);
+            viewButton.setVisible(available);
             resized();
         }
-        cleanButton.setToggleState(processor.view().clean, juce::dontSendNotification);
     };
-    cleanButton.setTooltip("Show the cleaned-up trace, or everything as first heard");
-    cleanButton.onClick = [this] { processor.setCleanTrace(! processor.view().clean); };
-    addChildComponent(cleanButton);
+    viewButton.setTooltip("Cleanup, other tracks, tuning and analysing again");
+    viewButton.onClick = [this] { showViewMenu(); };
+    addChildComponent(viewButton);
     traceView.onUseKey = [this](int root, bool minor) { setKey(root, minor ? "minor" : "major"); };
+    traceView.onUseTuning = [this](double hz) { processor.setReference(hz); traceView.settingsChanged(); };
     playButton.onClick = [this]
     {
         if (auto* host = processor.trackHost())
@@ -208,6 +207,7 @@ void PolyPitchAudioProcessorEditor::showReadout(double midi, bool inTune)
     {
         const auto& settings = processor.view();
         const auto& scale = polypitch::scales::all()[(size_t) polypitch::scales::findIndex(settings.scaleId.toRawUTF8())];
+        midi -= processor.pitchOffset();
         const int nearest = (int) std::floor(midi + 0.5), cents = juce::roundToInt((midi - nearest) * 100.0);
         note = juce::String::fromUTF8(polypitch::scales::noteName(nearest, polypitch::scales::usesFlats(settings.rootPc, scale)))
                + juce::String((int) std::floor(nearest / 12.0) - 1);
@@ -267,10 +267,10 @@ void PolyPitchAudioProcessorEditor::resized()
         bar.removeFromLeft(6);
         playButton.setBounds(bar.removeFromLeft(56));
     }
-    if (cleanButton.isVisible())
+    if (viewButton.isVisible())
     {
         bar.removeFromLeft(6);
-        cleanButton.setBounds(bar.removeFromLeft(56));
+        viewButton.setBounds(bar.removeFromLeft(56));
     }
 
     timeIn.setBounds(bar.removeFromRight(28));
@@ -290,4 +290,45 @@ void PolyPitchAudioProcessorEditor::resized()
     followButton.setBounds(bar.removeFromRight(62));
     bar.removeFromRight(6);
     readoutArea = bar;
+}
+
+void PolyPitchAudioProcessorEditor::showViewMenu()
+{
+    auto& settings = processor.view();
+    juce::PopupMenu menu, tuning;
+
+    // The track's measured tuning, if it's clear enough to offer, then the usual references.
+    const auto guess = processor.keyGuess();
+    double measured = 0.0;
+    if (guess.found && guess.tuningFocus >= 0.2 && std::abs(guess.tuningCents) <= 30.0)
+        measured = (double) juce::roundToInt(440.0 * std::pow(2.0, guess.tuningCents / 1200.0));
+    if (measured > 0.0)
+    {
+        tuning.addItem(1000 + (int) measured, "A=" + juce::String((int) measured) + " (measured from this track)", true, std::abs(settings.referenceHz - measured) < 0.01);
+        tuning.addSeparator();
+    }
+    for (int hz : { 430, 432, 435, 438, 440, 441, 442, 443, 444, 445, 446 })
+        if (hz != (int) measured)
+            tuning.addItem(1000 + hz, "A=" + juce::String(hz) + (hz == 440 ? " (standard)" : ""), true, std::abs(settings.referenceHz - hz) < 0.01);
+
+    menu.addItem(1, "Cleaned-up trace", processor.hasCleanTrace(), settings.clean);
+    menu.addItem(2, "Other PolyPitch tracks", true, settings.showOthers);
+    menu.addSubMenu("Tuning: A=" + juce::String(settings.referenceHz, 0), tuning);
+    menu.addSeparator();
+    menu.addItem(3, "Analyse this track again", processor.trackHost() != nullptr && ! processor.isAnalysing());
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&viewButton), [this](int chosen)
+    {
+        auto& view = processor.view();
+        if (chosen == 1)
+            processor.setCleanTrace(! view.clean);
+        else if (chosen == 2)
+            view.showOthers = ! view.showOthers;
+        else if (chosen == 3)
+            processor.startTrackAnalysis(false);
+        else if (chosen > 1000)
+            processor.setReference((double) (chosen - 1000));
+        if (chosen != 0)
+            traceView.settingsChanged();
+    });
 }

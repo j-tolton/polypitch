@@ -26,6 +26,7 @@ public:
     double positionSeconds() override;
     void seek(double seconds) override;
     void togglePlay() override;
+    void gridLines(double fromSeconds, double toSeconds, bool beats, std::vector<GridLine>& lines) override;
 
 private:
     void closeAccessor();
@@ -48,4 +49,6 @@ private:
     void (*setEditCursor)(void*, double, bool, bool) = nullptr;
     void (*playButtonEx)(void*) = nullptr;
     void (*stopButtonEx)(void*) = nullptr;
+    double (*timeToBeats)(void*, double, int*, int*, double*, int*) = nullptr;
+    double (*beatsToTime)(void*, double, const int*) = nullptr;
 };

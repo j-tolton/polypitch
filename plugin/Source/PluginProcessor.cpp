@@ -2,6 +2,59 @@
 #include "PluginEditor.h"
 #include "Scales.h"
 
+namespace
+{
+    // Bumped whenever the analysis changes, so old saved results aren't reused.
+    const char* const analysisVersion = "polypitch-analysis-1";
+    constexpr juce::int64 analysisFolderLimit = 300LL * 1024 * 1024;
+
+    std::mutex& registryLock() { static std::mutex m; return m; }
+    std::vector<PolyPitchAudioProcessor*>& registry() { static std::vector<PolyPitchAudioProcessor*> r; return r; }
+    int nextColourSlot = 0;
+    juce::File& analysisFolderOverride() { static juce::File f; return f; }
+
+    void writeRidges(juce::OutputStream& out, const std::vector<polypitch::Ridge>& ridges)
+    {
+        out.writeShort((short) juce::jmin<size_t>(ridges.size(), 32767));
+        for (size_t i = 0; i < ridges.size() && i < 32767; ++i)
+        {
+            const auto& r = ridges[i];
+            out.writeFloat((float) r.m);
+            out.writeFloat((float) r.w);
+            out.writeFloat((float) r.core);
+            out.writeFloat((float) r.centre);
+            out.writeShort((short) juce::jlimit(0, 32767, r.age));
+            out.writeShort((short) juce::jlimit(-1, 32767, r.from));
+            out.writeByte((char) ((r.hasPrev ? 1 : 0) | (r.hasPrev2 ? 2 : 0)));
+            out.writeFloat((float) r.prev);
+            out.writeFloat((float) r.prev2);
+        }
+    }
+
+    bool readRidges(juce::InputStream& in, std::vector<polypitch::Ridge>& ridges)
+    {
+        const int count = in.readShort();
+        if (count < 0 || in.isExhausted())
+            return false;
+        ridges.resize((size_t) count);
+        for (auto& r : ridges)
+        {
+            r.m = in.readFloat();
+            r.w = in.readFloat();
+            r.core = in.readFloat();
+            r.centre = in.readFloat();
+            r.age = in.readShort();
+            r.from = in.readShort();
+            const int flags = in.readByte();
+            r.hasPrev = (flags & 1) != 0;
+            r.hasPrev2 = (flags & 2) != 0;
+            r.prev = in.readFloat();
+            r.prev2 = in.readFloat();
+        }
+        return true;
+    }
+}
+
 PolyPitchAudioProcessor::PolyPitchAudioProcessor()
     : AudioProcessor(BusesProperties()
                          .withInput("Input", juce::AudioChannelSet::stereo(), true)
@@ -9,6 +62,11 @@ PolyPitchAudioProcessor::PolyPitchAudioProcessor()
       juce::Thread("PolyPitch analysis")
 {
     fifoData.resize((size_t) fifoSize);
+    {
+        const std::lock_guard<std::mutex> lock(registryLock());
+        registry().push_back(this);
+        colourSlot = nextColourSlot++;
+    }
 #if ! POLYPITCH_NO_PLUGIN_ENTRY
     reaper.onAvailable = [this] { setTrackHost(&reaper); };
 #endif
@@ -16,6 +74,11 @@ PolyPitchAudioProcessor::PolyPitchAudioProcessor()
 
 PolyPitchAudioProcessor::~PolyPitchAudioProcessor()
 {
+    {
+        const std::lock_guard<std::mutex> lock(registryLock());
+        auto& all = registry();
+        all.erase(std::remove(all.begin(), all.end(), this), all.end());
+    }
     stopTimer();
     stopThread(2000);
 }
@@ -257,7 +320,7 @@ void PolyPitchAudioProcessor::analyseWindow()
         frame.field[(size_t) i] = (juce::uint8) juce::jlimit(0, 255, (int) (evidence[i] * 255.0f + 0.5f));
 
     const std::lock_guard<std::mutex> lock(frameLock);
-    frame.ridges = tracker.track(evidence, measured, laneCount, ! isFirstFrame, targets);
+    frame.ridges = tracker.track(evidence, measured, laneCount, ! isFirstFrame, targets, referenceOffset.load());
     if (onTimeline)
     {
         frame.alternative = candidateTracker.track(evidence, measured, laneCount, ! isFirstFrame, targets);
@@ -285,6 +348,8 @@ void PolyPitchAudioProcessor::refineFrames()
     }
     lastStats = polypitch::refineTrace(cleaned, analysisRate / hopSize, targets, nullptr, &candidates, &levels);
     guess = polypitch::guessKey(cleaned);
+    for (size_t i = 0; i < cleaned.size(); ++i)
+        polypitch::tintRidges(cleaned[i], i > 0 ? &cleaned[i - 1] : nullptr, targets, referenceOffset.load());
     for (size_t i = 0; i < frames.size(); ++i)
         frames[i].alternative = std::move(cleaned[i]);
     showingClean = false;
@@ -294,6 +359,163 @@ void PolyPitchAudioProcessor::refineFrames()
             frame.ridges.swap(frame.alternative);
     showingClean = viewSettings.clean;
     generation.fetch_add(1);
+    saveAnalysis();
+}
+
+void PolyPitchAudioProcessor::retintShown()
+{
+    // Call with the frame lock held.
+    for (size_t i = 0; i < frames.size(); ++i)
+        polypitch::tintRidges(frames[i].ridges, i > 0 ? &frames[i - 1].ridges : nullptr, targets, referenceOffset.load());
+    if (! frames.empty())
+        tracker.adoptTints(frames.back().ridges);
+    generation.fetch_add(1);
+}
+
+void PolyPitchAudioProcessor::setReference(double hz)
+{
+    const std::lock_guard<std::mutex> lock(frameLock);
+    viewSettings.referenceHz = juce::jlimit(400.0, 480.0, hz);
+    referenceOffset.store(12.0 * std::log2(viewSettings.referenceHz / 440.0));
+    retintShown();
+}
+
+std::vector<PolyPitchAudioProcessor*> PolyPitchAudioProcessor::otherInstances() const
+{
+    const std::lock_guard<std::mutex> lock(registryLock());
+    std::vector<PolyPitchAudioProcessor*> others;
+    for (auto* p : registry())
+        if (p != this)
+            others.push_back(p);
+    return others;
+}
+
+juce::File PolyPitchAudioProcessor::analysisFolder()
+{
+    if (analysisFolderOverride() != juce::File())
+        return analysisFolderOverride();
+   #if JUCE_WINDOWS
+    return juce::File::getSpecialLocation(juce::File::windowsLocalAppData).getChildFile("PolyPitch").getChildFile("Analyses");
+   #else
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("PolyPitch").getChildFile("Analyses");
+   #endif
+}
+
+void PolyPitchAudioProcessor::setAnalysisFolder(const juce::File& folder)
+{
+    analysisFolderOverride() = folder;
+}
+
+juce::String PolyPitchAudioProcessor::fingerprint(double start, double end)
+{
+    // Samples from across the track, with where it sits and which analysis made it. Any edit to
+    // the audio is very likely to change at least one of them.
+    juce::MemoryOutputStream bytes;
+    bytes.writeString(analysisVersion);
+    bytes.writeDouble(start);
+    bytes.writeDouble(end);
+    std::vector<double> stereo(512 * 2);
+    for (int i = 0; i < 48; ++i)
+    {
+        track->read(start + (end - start) * (i + 0.5) / 48.0, (int) targetRate, 512, stereo.data());
+        for (double v : stereo)
+            bytes.writeShort((short) juce::jlimit(-32768.0, 32767.0, std::round(v * 32767.0)));
+    }
+    // Two independent 64-bit FNV-1a hashes: plenty to tell one recording from another.
+    juce::uint64 a = 14695981039346656037ULL, b = 1099511628211ULL * 31ULL;
+    const auto* data = static_cast<const juce::uint8*>(bytes.getData());
+    for (size_t i = 0; i < bytes.getDataSize(); ++i)
+    {
+        a = (a ^ data[i]) * 1099511628211ULL;
+        b = (b ^ data[i]) * 0x100000001b3ULL + 0x9e3779b97f4a7c15ULL;
+    }
+    return juce::String::toHexString((juce::int64) a) + juce::String::toHexString((juce::int64) b);
+}
+
+void PolyPitchAudioProcessor::saveAnalysis()
+{
+    // Called with the frame lock held, once the cleanup is done.
+    if (analysisKey.isEmpty() || frames.empty())
+        return;
+    auto folder = analysisFolder();
+    if (! folder.createDirectory())
+        return;
+    const auto file = folder.getChildFile(analysisKey + ".ppa");
+    file.deleteFile();
+    {
+        juce::FileOutputStream stream(file);
+        if (! stream.openedOk())
+            return;
+        juce::GZIPCompressorOutputStream out(stream, 6);
+        out.writeString("PPA1");
+        out.writeString(trackLabel);
+        out.writeDouble(trackStart);
+        out.writeDouble(trackEnd);
+        out.writeInt((int) frames.size());
+        for (const auto& frame : frames)
+        {
+            out.writeDouble(frame.timeMs);
+            out.writeFloat(frame.level);
+            writeRidges(out, showingClean ? frame.alternative : frame.ridges);
+            writeRidges(out, showingClean ? frame.ridges : frame.alternative);
+        }
+    }
+
+    // Keep the folder from growing without end: the oldest go first.
+    auto files = folder.findChildFiles(juce::File::findFiles, false, "*.ppa");
+    std::sort(files.begin(), files.end(), [](const juce::File& a, const juce::File& b) { return a.getLastModificationTime() > b.getLastModificationTime(); });
+    juce::int64 total = 0;
+    for (const auto& f : files)
+    {
+        total += f.getSize();
+        if (total > analysisFolderLimit && f != file)
+            f.deleteFile();
+    }
+}
+
+bool PolyPitchAudioProcessor::loadAnalysis(const juce::String& key)
+{
+    const auto file = analysisFolder().getChildFile(key + ".ppa");
+    if (! file.existsAsFile())
+        return false;
+    juce::FileInputStream stream(file);
+    if (! stream.openedOk())
+        return false;
+    juce::GZIPDecompressorInputStream in(&stream, false);
+    if (in.readString() != "PPA1")
+        return false;
+    const auto label = in.readString();
+    juce::ignoreUnused(label);
+    in.readDouble();
+    in.readDouble();
+    const int count = in.readInt();
+    if (count <= 0 || count > 2000000)
+        return false;
+
+    std::deque<TraceFrame> loaded;
+    std::vector<std::vector<polypitch::Ridge>> clean((size_t) count);
+    for (int i = 0; i < count; ++i)
+    {
+        TraceFrame frame;
+        frame.timeMs = in.readDouble();
+        frame.level = in.readFloat();
+        std::vector<polypitch::Ridge> raw;
+        if (! readRidges(in, raw) || ! readRidges(in, clean[(size_t) i]))
+            return false;
+        // The saved file has no background evidence: only the notes are kept.
+        frame.ridges = viewSettings.clean ? clean[(size_t) i] : raw;
+        frame.alternative = viewSettings.clean ? std::move(raw) : clean[(size_t) i];
+        loaded.push_back(std::move(frame));
+    }
+
+    const std::lock_guard<std::mutex> lock(frameLock);
+    frames.swap(loaded);
+    guess = polypitch::guessKey(clean);
+    lastStats = {};
+    showingClean = viewSettings.clean;
+    refined.store(true);
+    retintShown();
+    return true;
 }
 
 void PolyPitchAudioProcessor::setCleanTrace(bool shouldBeClean)
@@ -307,7 +529,7 @@ void PolyPitchAudioProcessor::setCleanTrace(bool shouldBeClean)
     {
         frames[i].ridges.swap(frames[i].alternative);
         // The targets may have changed while this version was out of sight.
-        polypitch::tintRidges(frames[i].ridges, i > 0 ? &frames[i - 1].ridges : nullptr, targets);
+        polypitch::tintRidges(frames[i].ridges, i > 0 ? &frames[i - 1].ridges : nullptr, targets, referenceOffset.load());
     }
     generation.fetch_add(1);
 }
@@ -338,7 +560,7 @@ void PolyPitchAudioProcessor::analyseTrackOnce()
     }
 }
 
-bool PolyPitchAudioProcessor::startTrackAnalysis()
+bool PolyPitchAudioProcessor::startTrackAnalysis(bool useSaved)
 {
     if (track == nullptr)
         return false;
@@ -376,6 +598,18 @@ bool PolyPitchAudioProcessor::startTrackAnalysis()
     trackRead = 0;
     trackLabel = track->trackName();
     configure(targetRate);
+    analysisKey = fingerprint(start, end);
+
+    // The same audio analysed before opens at once.
+    fromSaved = useSaved && loadAnalysis(analysisKey);
+    if (fromSaved)
+    {
+        readingTrack = false;
+        startThread(juce::Thread::Priority::low);
+        startTimer(250);
+        return true;
+    }
+
     analysedSamples2.store(0);
     refined.store(false);
     // Half a window of silence each side, so the first and last frames centre on the track's ends.
@@ -459,11 +693,7 @@ void PolyPitchAudioProcessor::setTargets(int mask)
         return;
     targets = mask;
     // Old notes are judged against the new targets too.
-    for (size_t i = 0; i < frames.size(); ++i)
-        polypitch::tintRidges(frames[i].ridges, i > 0 ? &frames[i - 1].ridges : nullptr, targets);
-    if (! frames.empty())
-        tracker.adoptTints(frames.back().ridges);
-    generation.fetch_add(1);
+    retintShown();
 }
 
 bool PolyPitchAudioProcessor::waitForAnalysis(int timeoutMs)
@@ -489,6 +719,8 @@ void PolyPitchAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     xml.setAttribute("centre", viewSettings.centre);
     xml.setAttribute("follow", viewSettings.follow);
     xml.setAttribute("clean", viewSettings.clean);
+    xml.setAttribute("others", viewSettings.showOthers);
+    xml.setAttribute("reference", viewSettings.referenceHz);
     xml.setAttribute("width", viewSettings.width);
     xml.setAttribute("height", viewSettings.height);
     copyXmlToBinary(xml, destData);
@@ -507,6 +739,8 @@ void PolyPitchAudioProcessor::setStateInformation(const void* data, int sizeInBy
     viewSettings.centre = juce::jlimit(24.0, 108.0, xml->getDoubleAttribute("centre", 57.0));
     viewSettings.follow = xml->getBoolAttribute("follow", true);
     setCleanTrace(xml->getBoolAttribute("clean", true));
+    viewSettings.showOthers = xml->getBoolAttribute("others", true);
+    setReference(xml->getDoubleAttribute("reference", 440.0));
     viewSettings.width = juce::jlimit(480, 3000, xml->getIntAttribute("width", 960));
     viewSettings.height = juce::jlimit(280, 2000, xml->getIntAttribute("height", 540));
 

@@ -251,6 +251,15 @@ namespace
         double positionSeconds() override { return position; }
         void seek(double seconds) override { soughtTo = seconds; position = seconds; }
         void togglePlay() override { playing = ! playing; ++toggles; }
+        double bpm = 120.0;
+        int beatsPerBar = 4;
+        void gridLines(double from, double to, bool beats, std::vector<GridLine>& lines) override
+        {
+            const double beat = 60.0 / bpm;
+            for (int b = juce::jmax(0, (int) std::floor(from / beat)); b * beat <= to; ++b)
+                if (b * beat >= from && (beats || b % beatsPerBar == 0))
+                    lines.push_back({ b * beat, b / beatsPerBar + 1, b % beatsPerBar == 0 });
+        }
     };
 
     bool pumpUntilAnalysed(PolyPitchAudioProcessor& p, double& tookMs)
@@ -771,6 +780,109 @@ namespace
         return 0;
     }
 
+    // Saved analyses, the tuning reference, other tracks and the bar grid.
+    void pluginFeatures()
+    {
+        const auto folder = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("polypitch-test-analyses");
+        folder.deleteRecursively();
+        PolyPitchAudioProcessor::setAnalysisFolder(folder);
+
+        // Three seconds of A at 443 Hz, a little sharp of A=440.
+        FakeHost host;
+        host.audio = tone(48000.0, 3.0, 443.0);
+        double took = 0.0;
+
+        const auto summary = [](PolyPitchAudioProcessor& p)
+        {
+            const std::lock_guard<std::mutex> lock(p.traceLock());
+            int ridges = 0;
+            double total = 0.0;
+            for (const auto& frame : p.traceFrames())
+                for (const auto& r : frame.ridges)
+                {
+                    ++ridges;
+                    total += r.m + r.core;
+                }
+            return std::pair<int, double>(ridges, total);
+        };
+
+        PolyPitchAudioProcessor first;
+        first.setTrackHost(&host);
+        first.analyseTrackOnce();
+        pumpUntilAnalysed(first, took);
+        const auto saved = folder.findChildFiles(juce::File::findFiles, false, "*.ppa");
+        check(saved.size() == 1 && ! first.loadedSavedAnalysis(), "a finished analysis is saved: " + juce::String(saved.size()) + " file, " + juce::String(saved.isEmpty() ? 0 : (int) saved[0].getSize()) + " bytes");
+
+        {
+            PolyPitchAudioProcessor again;
+            again.setTrackHost(&host);
+            again.analyseTrackOnce();
+            const auto a = summary(first), b = summary(again);
+            check(again.loadedSavedAnalysis() && ! again.isAnalysing(), "the same audio opens at once from it");
+            check(a.first == b.first && std::abs(a.second - b.second) < 1.0e-3 * juce::jmax(1.0, std::abs(a.second)), "with the same trace: " + juce::String(a.first) + " and " + juce::String(b.first) + " ridges");
+            check(again.keyGuess().found, "and a key suggestion");
+            again.setCleanTrace(false);
+            check(summary(again).first > 0, "and the trace as first heard too");
+        }
+
+        {
+            FakeHost edited = host;
+            for (auto& v : edited.audio)
+                v *= 0.8f;
+            PolyPitchAudioProcessor changed;
+            changed.setTrackHost(&edited);
+            changed.analyseTrackOnce();
+            check(! changed.loadedSavedAnalysis() && changed.isAnalysing(), "changed audio is analysed afresh");
+            pumpUntilAnalysed(changed, took);
+        }
+
+        // The tuning reference: at A=440 this note is 12 cents sharp, at A=443 it's in tune.
+        const auto aIsGreen = [](PolyPitchAudioProcessor& p)
+        {
+            const std::lock_guard<std::mutex> lock(p.traceLock());
+            const auto& frames = p.traceFrames();
+            for (const auto& r : frames[frames.size() / 2].ridges)
+                if (std::abs(r.m - 69.1) < 0.3)
+                    return r.inTune;
+            return false;
+        };
+        check(! aIsGreen(first), "A at 443 Hz is not in tune against A=440");
+        first.setReference(443.0);
+        check(aIsGreen(first) && std::abs(first.pitchOffset() - 0.118) < 0.002, "but is against A=443: offset " + juce::String(first.pitchOffset(), 3));
+        check(first.keyGuess().tuningCents > 9.0 && first.keyGuess().tuningCents < 14.0, "and its tuning is measured: " + juce::String(first.keyGuess().tuningCents, 1) + " cents");
+
+        // Other tracks see each other, and forget each other.
+        {
+            FakeHost harmony;
+            harmony.audio = tone(48000.0, 3.0, 554.37);
+            PolyPitchAudioProcessor second;
+            second.setTrackHost(&harmony);
+            second.analyseTrackOnce();
+            pumpUntilAnalysed(second, took);
+            const auto others = first.otherInstances();
+            check(std::find(others.begin(), others.end(), &second) != others.end(), "another PolyPitch track is visible to the first");
+
+            PolyPitchAudioProcessorEditor editor(first);
+            editor.setSize(1100, 560);
+            host.position = 1.5;
+            editor.trace().tick();
+            editor.trace().tick();
+            const auto image = editor.createComponentSnapshot(editor.getLocalBounds(), true, 1.0f);
+            check(editor.trace().otherTracksShown() == 1, "and drawn alongside it: " + juce::String(editor.trace().otherTracksShown()));
+            // At 120 bpm, a beat every half second. The view runs from 1.83 s before the project starts to
+            // 8.17 s, and there are no beats before the start, so 0 to 8 s: 17 lines, give or take an edge.
+            check(editor.trace().gridLineCount() >= 16 && editor.trace().gridLineCount() <= 18, "the bar grid: " + juce::String(editor.trace().gridLineCount()) + " lines");
+            const auto out = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("polypitch-features.png");
+            out.deleteFile();
+            juce::FileOutputStream stream(out);
+            juce::PNGImageFormat().writeImageToStream(image, stream);
+        }
+        const auto after = first.otherInstances();
+        check(after.empty(), "a removed track is forgotten: " + juce::String((int) after.size()) + " left");
+        folder.deleteRecursively();
+        PolyPitchAudioProcessor::setAnalysisFolder({});
+    }
+
     int timelinePicture(const juce::File& wav, const juce::File& out, double playhead, double seconds, const juce::String& mode, double spanWanted, double centreWanted)
     {
         double rate = 0.0;
@@ -936,6 +1048,7 @@ int main(int argc, char** argv)
         toneAtRate(rate, block);
     retint();
     falseOctave();
+    pluginFeatures();
     if (argc == 2)
     {
         matchesEngine(juce::File(argv[1]));

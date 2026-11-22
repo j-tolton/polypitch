@@ -41,6 +41,8 @@ public:
         double centre = 57.0;
         bool follow = true;
         bool clean = true;
+        bool showOthers = true;
+        double referenceHz = 440.0;
         int width = 960;
         int height = 540;
     };
@@ -82,13 +84,17 @@ public:
     double blockMs() const noexcept { return lastBlockMs.load(); }
 
     void setTargets(int mask);
+    // The pitch that counts as A, so a track that isn't at 440 is judged on its own terms.
+    void setReference(double hz);
+    double pitchOffset() const noexcept { return referenceOffset.load(); }
 
     // Working on a whole track. Frames are placed on the project timeline, and the live
     // audio is ignored. Without a track to read the plugin listens instead.
     void setTrackHost(TrackHost*);
     TrackHost* trackHost() noexcept { return track; }
     bool isTimeline() const noexcept { return timeline.load(); }
-    bool startTrackAnalysis();
+    // Uses a saved analysis of the same audio when there is one, unless told not to.
+    bool startTrackAnalysis(bool useSaved = true);
     void analyseTrackOnce();
     bool isAnalysing() const noexcept { return timeline.load() && ! refined.load(); }
     // Show the cleaned-up trace, or everything as first heard.
@@ -107,6 +113,15 @@ public:
 #endif
     ViewSettings& view() noexcept { return viewSettings; }
 
+    // Every PolyPitch loaded in this host, so each can show the others' notes alongside its own.
+    std::vector<PolyPitchAudioProcessor*> otherInstances() const;
+    int colourIndex() const noexcept { return colourSlot; }
+    bool loadedSavedAnalysis() const noexcept { return fromSaved; }
+
+    // Where finished analyses are kept between sessions.
+    static juce::File analysisFolder();
+    static void setAnalysisFolder(const juce::File&);
+
     // Waits until the analysis has caught up with the audio. For tests.
     bool waitForAnalysis(int timeoutMs);
 
@@ -119,6 +134,10 @@ private:
     void analyseMono(const float* samples, int count);
     void configure(double sampleRate);
     void analyseWindow();
+    juce::String fingerprint(double start, double end);
+    void saveAnalysis();
+    bool loadAnalysis(const juce::String& key);
+    void retintShown();
 
     static constexpr int fftSize = 8192;
     static constexpr int hopSize = 1024;
@@ -162,7 +181,10 @@ private:
     juce::int64 trackRead = 0, trackLength = 0;
     bool readingTrack = false, changed = false, askedToAnalyse = false;
     int pollCountdown = 0;
-    juce::String trackLabel;
+    juce::String trackLabel, analysisKey;
+    bool fromSaved = false;
+    int colourSlot = 0;
+    std::atomic<double> referenceOffset { 0.0 };
 
     // Shared between the analysis thread and the editor.
     std::mutex frameLock;

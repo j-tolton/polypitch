@@ -42,8 +42,12 @@ public:
     std::function<void()> onFollowChanged;
     // Whether the transport controls apply, and whether it is playing.
     std::function<void(bool, bool)> onTransport;
-    // Asked to use the suggested key.
+    // Asked to use the suggested key, and the measured tuning if it's worth mentioning.
     std::function<void(int, bool)> onUseKey;
+    std::function<void(double)> onUseTuning;
+
+    int gridLineCount() const noexcept { return (int) barLines.size(); }
+    int otherTracksShown() const noexcept { return othersShown; }
 
     double lastPaintMs() const noexcept { return paintMs; }
 
@@ -85,6 +89,9 @@ private:
     double secondsLimit() const;
     void paintPlayhead(juce::Graphics&, double now) const;
     void paintStatus(juce::Graphics&) const;
+    void paintBars(juce::Graphics&, double now);
+    void paintOthers(juce::Graphics&, double now);
+    double suggestedReference() const;
 
     void paintGrid(juce::Graphics&) const;
     void paintTiles(juce::Graphics&, double now, float scale);
@@ -116,6 +123,10 @@ private:
     // The timeline: where the playhead is, and where the view ends.
     double playheadMs = 0.0, viewEnd = 0.0, hostMs = -1.0, hostMsAt = 0.0, seenNewest = -1.0;
     bool wasPlaying = false, wasTimeline = false, wasAnalysing = false, viewPlaced = false;
+
+    std::vector<GridLine> barLines;
+    int othersShown = 0;
+    double othersSeen = -1.0;
 
     std::map<int, Tile> tiles;
     double tileLo = 0.0, tileHi = 0.0;

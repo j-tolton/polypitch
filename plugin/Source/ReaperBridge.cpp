@@ -68,6 +68,8 @@ void ReaperBridge::setIHostApplication(Steinberg::FUnknown* host)
     if (! lookUp(accessorChanged, "AudioAccessorStateChanged"))
         lookUp(accessorChanged, "AudioAccessorValidateState");
     lookUp(getTrackNameFn, "GetTrackName");
+    lookUp(timeToBeats, "TimeMap2_timeToBeats");
+    lookUp(beatsToTime, "TimeMap2_beatsToTime");
 
     if (complete && onAvailable != nullptr)
         onAvailable();
@@ -153,4 +155,36 @@ void ReaperBridge::togglePlay()
         stopButtonEx(project);
     else
         playButtonEx(project);
+}
+
+void ReaperBridge::gridLines(double fromSeconds, double toSeconds, bool beats, std::vector<GridLine>& lines)
+{
+    if (hostInterface == nullptr || timeToBeats == nullptr || beatsToTime == nullptr)
+        return;
+    // Measures count from zero here and from one on Reaper's ruler. Beat positions are relative
+    // to the start of their measure, so tempo and time signature changes come out right.
+    int measure = 0, beatsInBar = 4, denominator = 4;
+    double fullBeats = 0.0;
+    timeToBeats(project, juce::jmax(0.0, fromSeconds), &measure, &beatsInBar, &fullBeats, &denominator);
+    for (int guard = 0; guard < 4000; ++guard, ++measure)
+    {
+        const double barStart = beatsToTime(project, 0.0, &measure);
+        if (barStart > toSeconds)
+            break;
+        if (barStart >= fromSeconds)
+            lines.push_back({ barStart, measure + 1, true });
+        if (! beats)
+            continue;
+        int sameMeasure = 0, length = 4, denom = 4;
+        double unused = 0.0;
+        timeToBeats(project, barStart + 1.0e-6, &sameMeasure, &length, &unused, &denom);
+        for (int beat = 1; beat < length; ++beat)
+        {
+            const double at = beatsToTime(project, (double) beat, &measure);
+            if (at > toSeconds)
+                break;
+            if (at >= fromSeconds)
+                lines.push_back({ at, measure + 1, false });
+        }
+    }
 }

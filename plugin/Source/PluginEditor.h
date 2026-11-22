@@ -42,7 +42,8 @@ private:
     juce::ComboBox rootBox, scaleBox;
     juce::String readoutNote { juce::String::fromUTF8("\xe2\x80\x94") }, readoutCents;
     bool readoutInTune = false;
-    juce::TextButton playButton { "Play" }, cleanButton { "Clean" };
+    juce::TextButton playButton { "Play" }, viewButton { "View" };
+    void showViewMenu();
     juce::TextButton followButton { "Follow" }, fitButton { "Fit" };
     juce::TextButton pitchIn { "+" }, pitchOut { juce::String::fromUTF8("\xe2\x88\x92") };
     juce::TextButton timeIn { "+" }, timeOut { juce::String::fromUTF8("\xe2\x88\x92") };
