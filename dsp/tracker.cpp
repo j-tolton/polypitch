@@ -22,13 +22,13 @@ double ridgeAlpha(const Ridge& r){
  // A ridge earns its brightness by lasting: a note is full within a moment, a flicker never is.
  return DOT_ALPHA*r.core*std::min(1.0,(r.age+1)/(double)RIDGE_AGE_FULL);
 }
-void tintRidges(std::vector<Ridge>& rs,const std::vector<Ridge>* prev,int targets){
+void tintRidges(std::vector<Ridge>& rs,const std::vector<Ridge>* prev,int targets,double offset){
  // Green is easier to keep than to win, so a note wobbling around its target holds its colour.
  // A ridge must last a moment first, so clicks and bumps stay neutral. The tint then eases
  // towards its goal, and how close the note is still sets how vivid the green is.
  for(Ridge& r:rs){
   const Ridge* before=r.from>=0&&prev?&(*prev)[r.from]:nullptr;
-  const double cents=targetCents(r.centre,targets);
+  const double cents=targetCents(r.centre-offset,targets);
   r.inTune=r.age>=TINT_AGE&&cents<=(before&&before->inTune?GREEN_KEEP_CENTS:GREEN_GAIN_CENTS);
   const double amount=inTuneAmount(cents),goal=r.inTune?std::max(.65,amount):std::min(.2,amount),from=before?before->tint:0;
   r.tint=from+(goal-from)*TINT_EASE;
@@ -81,9 +81,9 @@ void Tracker::linkRidges(bool canBridge){
   next.push_back(r);nextTrails.push_back(trail);
  }
 }
-const std::vector<Ridge>& Tracker::track(const float* field,const float* measured,int laneCount,bool canBridge,int targets){
+const std::vector<Ridge>& Tracker::track(const float* field,const float* measured,int laneCount,bool canBridge,int targets,double offset){
  makeVotes(field,measured,laneCount);findRidges();linkRidges(canBridge);
- tintRidges(next,&last,targets);
+ tintRidges(next,&last,targets,offset);
  last.swap(next);lastTrails.swap(nextTrails);
  return last;
 }

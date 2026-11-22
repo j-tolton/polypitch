@@ -1,3 +1,13 @@
 build/
 build-native/
 tests/evidence_test
+
+# Audio and scratch files kept out of the repo
+*.mp3
+*.wav
+*.reapeaks
+*.png
+!web/*.png
+check.js
+head.txt
+snippet.txt

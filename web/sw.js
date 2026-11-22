@@ -1,7 +1,7 @@
 // Keeps the app working offline. While online it always prefers the newest deployment, so no version
 // needs bumping here. The cache only answers when the network fails or takes too long.
 const CACHE='polypitch',WAIT_MS=2500,SLOW_MS=10000;let slowUntil=0;
-const FILES=['./','polypitch.js','polypitch.wasm','audio-worklet.js','manifest.webmanifest','icon-192.png','icon-512.png'];
+const FILES=['./','polypitch.js','polypitch.wasm','audio-worklet.js','strum.js','manifest.webmanifest','icon-192.png','icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES.map(f=>new Request(f,{cache:'no-cache'})))).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
 self.addEventListener('fetch',e=>{
