@@ -667,6 +667,19 @@ const fsBtn=$('#fsBtn'),pageRoot=document.documentElement;
 function fullscreenElement(){return document.fullscreenElement||document.webkitFullscreenElement}
 // Running as an app: added to the home screen, or the Android app (which runs in standalone mode, or inside Capacitor).
 const inApp=matchMedia('(display-mode: fullscreen),(display-mode: standalone)').matches||!!(window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform());
+const capPlugins=window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform()?Capacitor.Plugins:null;
+async function saveFile(blob,name){
+ const fs=capPlugins&&capPlugins.Filesystem,share=capPlugins&&capPlugins.Share;
+ if(!fs||!share){const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);return}
+ try{const data=await new Promise((ok,bad)=>{const r=new FileReader();r.onload=()=>ok(String(r.result).split(',')[1]);r.onerror=()=>bad(r.error);r.readAsDataURL(blob)});
+  const {uri}=await fs.writeFile({path:name,data,directory:'CACHE'});await share.share({title:name,files:[uri]})}
+ catch(e){if(!/cancel/i.test(e&&e.message||''))status.textContent='Could not save '+name+': '+(e&&e.message||e)}
+}
+if(capPlugins&&capPlugins.App)capPlugins.App.addListener('backButton',()=>{
+ if(!keyPanel.hidden||!settingsPanel.hidden)closePanels();
+ else if(tunerOpen)openTuner(false);
+ else capPlugins.App.minimizeApp();
+});
 // Only the browser's own bars go. There's nothing to offer when it's already an app, or on iPhones, which don't allow it.
 fsBtn.hidden=!(pageRoot.requestFullscreen||pageRoot.webkitRequestFullscreen)||inApp;
 // Nor any point explaining how to add it to the home screen.
@@ -790,13 +803,13 @@ document.addEventListener('keydown',e=>{
  e.preventDefault();
 });
 
-debugExport.onclick=()=>{if(!diagnostics.length)return;const esc=x=>'"'+String(x).replaceAll('"','""')+'"';let rows=['time_ms,frame,pcm_total_samples,worklet_blocks,window_mean,window_rms,window_zero_crossings,cpp_rms,centroid_hz,bg_mean_db,residual_mean_db,noise,best_midi,best_evidence,peak_count,analysis_ms,draw_ms,total_ms,audio_lag_ms,retained_frames,visible_frames,rendered_frames,fft_top,raw_peaks'];for(const d of diagnostics)rows.push([d.t.toFixed(1),d.frame,d.pcmTotal,d.workletBlocks,d.windowMean,d.windowRms,d.windowZc,d.rms,d.centroid,d.bg,d.residual,d.noise,d.bestMidi,d.bestEvidence,d.peakCount,d.analysisMs.toFixed(3),d.drawMs.toFixed(3),d.totalMs.toFixed(3),d.audioLagMs.toFixed(1),d.retainedFrames,d.visibleFrames,d.renderedFrames,esc(d.top.map(x=>x[0].toFixed(1)+'@'+x[1].toFixed(1)).join(';')),esc(d.rawPeaks.map(x=>x[0].toFixed(3)+'@'+x[1].toFixed(3)).join(';'))].join(','));const b=new Blob([rows.join('\n')],{type:'text/csv'}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=`polypitch-${VERSION}-diagnostics.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)};
+debugExport.onclick=()=>{if(!diagnostics.length)return;const esc=x=>'"'+String(x).replaceAll('"','""')+'"';let rows=['time_ms,frame,pcm_total_samples,worklet_blocks,window_mean,window_rms,window_zero_crossings,cpp_rms,centroid_hz,bg_mean_db,residual_mean_db,noise,best_midi,best_evidence,peak_count,analysis_ms,draw_ms,total_ms,audio_lag_ms,retained_frames,visible_frames,rendered_frames,fft_top,raw_peaks'];for(const d of diagnostics)rows.push([d.t.toFixed(1),d.frame,d.pcmTotal,d.workletBlocks,d.windowMean,d.windowRms,d.windowZc,d.rms,d.centroid,d.bg,d.residual,d.noise,d.bestMidi,d.bestEvidence,d.peakCount,d.analysisMs.toFixed(3),d.drawMs.toFixed(3),d.totalMs.toFixed(3),d.audioLagMs.toFixed(1),d.retainedFrames,d.visibleFrames,d.renderedFrames,esc(d.top.map(x=>x[0].toFixed(1)+'@'+x[1].toFixed(1)).join(';')),esc(d.rawPeaks.map(x=>x[0].toFixed(3)+'@'+x[1].toFixed(3)).join(';'))].join(','));saveFile(new Blob([rows.join('\n')],{type:'text/csv'}),`polypitch-${VERSION}-diagnostics.csv`)};
 
 function wavBlob(samples,sr){const ab=new ArrayBuffer(44+samples.length*2),dv=new DataView(ab);const str=(o,x)=>{for(let i=0;i<x.length;i++)dv.setUint8(o+i,x.charCodeAt(i))};str(0,'RIFF');dv.setUint32(4,36+samples.length*2,true);str(8,'WAVE');str(12,'fmt ');dv.setUint32(16,16,true);dv.setUint16(20,1,true);dv.setUint16(22,1,true);dv.setUint32(24,sr,true);dv.setUint32(28,sr*2,true);dv.setUint16(32,2,true);dv.setUint16(34,16,true);str(36,'data');dv.setUint32(40,samples.length*2,true);let o=44;for(const x of samples){const v=Math.max(-1,Math.min(1,x));dv.setInt16(o,v<0?v*32768:v*32767,true);o+=2}return new Blob([ab],{type:'audio/wav'})}
 pcmExport.onclick=()=>{
  // The most recent take, up to its last 20 seconds.
  const take=takes[takes.length-1];if(!take||!take.length)return;
- const n=Math.min(take.length,Math.round(take.sr*pcmSeconds)),samples=takeSamples(take,take.length-n,n),b=wavBlob(samples,take.sr),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=`polypitch-${VERSION}-pcm-last-${Math.round(n/take.sr)}s.wav`;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)};
+ const n=Math.min(take.length,Math.round(take.sr*pcmSeconds)),samples=takeSamples(take,take.length-n,n),b=wavBlob(samples,take.sr);saveFile(b,`polypitch-${VERSION}-pcm-last-${Math.round(n/take.sr)}s.wav`)};
 
 if(matchMedia('(pointer:coarse) and (orientation:portrait)').matches){hist.value='4';histv.textContent='4 s'}
 // ---------- Instrument ----------

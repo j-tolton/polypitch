@@ -67,7 +67,9 @@ Copy the APK to the phone and open it. Android asks once to allow installing app
 cd app; node make-icons.js capacitor\android\app\src\main\res twa\app\src\main\res
 ```
 
-## Known gaps in the Capacitor build
+## Android-only behaviour in the Capacitor build
 
-- **Export buttons.** "Export last 20 s" and "Export diagnostics" do nothing, because a WebView doesn't handle downloads. Fixing this needs a native plugin to save or share the file.
-- **Back button.** It closes the app instead of closing an open panel.
+It uses three Capacitor plugins: App, Filesystem and Share.
+
+- **Export buttons.** "Export last 20 s" and "Export diagnostics" save the file to the app's cache, then open Android's share sheet so it can be sent to Drive, Gmail, Quick Share and so on. In a browser they still download as before.
+- **Back button.** It closes the settings or key panel first, then the tuner. On the main screen it sends the app to the background, so the trace is still there when it's reopened.
