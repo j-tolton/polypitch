@@ -5,6 +5,7 @@ A pitch trace and tuner for practising an instrument or singing. Play or sing, a
 It comes in two forms that share one analysis engine:
 
 - **The web app** (`web/`), which works on a phone or computer and offline once opened. It's live at https://polypitch.pages.dev/.
+- **Android apps** (`app/`), which wrap the web app as an installable APK. See [app/README.md](app/README.md).
 - **A VST3 plugin** (`plugin/`), which draws the same trace for a track in Reaper or another DAW. See [plugin/README.md](plugin/README.md).
 
 ## The web app
@@ -30,10 +31,11 @@ The full controls are listed under Settings in the app.
 | `audio-worklet.js` | Passes microphone audio to the page |
 | `strum.js` | Reads a strummed chord; also used by the strum tests |
 | `sw.js`, `manifest.webmanifest`, `icon-*.png` | Let it install as an app and work offline |
+| `.well-known/assetlinks.json` | Tells Chrome the Android app is allowed to show the site full screen |
 
 ### Deploying
 
-Upload the `web` folder to Cloudflare Pages (drag and drop). There's no build step for the page itself. Only the engine is built, and `polypitch.js` and `polypitch.wasm` are committed already built.
+Cloudflare Pages publishes the `web` folder from the `master` branch on GitHub. A push is live within about half a minute. There's no build step for the page itself. Only the engine is built, and `polypitch.js` and `polypitch.wasm` are committed already built.
 
 For local testing, serve `web/` from any static server. The microphone needs `localhost` or HTTPS.
 
@@ -74,6 +76,7 @@ The plugin has its own tests, described in its README.
 web/      the web app
 dsp/      the shared analysis engine
 tests/    native engine tests
+app/      the Android apps
 plugin/   the VST3 plugin (JUCE)
 ```
 
