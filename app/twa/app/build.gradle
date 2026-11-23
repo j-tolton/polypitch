@@ -1,0 +1,50 @@
+// PolyPitch as a Trusted Web Activity: opens https://polypitch.pages.dev/ full screen in Chrome.
+plugins {
+    id 'com.android.application'
+}
+
+// Release builds are signed with the key described in ~/.polypitch/keystore.properties
+// (storeFile, storePassword, keyAlias, keyPassword), which is kept out of the repo.
+def keyProps = new Properties()
+def keyFile = new File(System.getProperty('user.home'), '.polypitch/keystore.properties')
+if (keyFile.exists()) keyFile.withInputStream { keyProps.load(it) }
+
+android {
+    namespace 'app.polypitch.web'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'app.polypitch.web'
+        minSdk 24
+        targetSdk 36
+        versionCode 1
+        versionName '6.10'
+    }
+
+    signingConfigs {
+        release {
+            if (keyFile.exists()) {
+                storeFile new File(keyProps.storeFile)
+                storePassword keyProps.storePassword
+                keyAlias keyProps.keyAlias
+                keyPassword keyProps.keyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (keyFile.exists()) signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.7.4'
+}

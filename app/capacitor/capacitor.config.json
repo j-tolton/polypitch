@@ -1,0 +1,13 @@
+{
+  "appId": "app.polypitch",
+  "appName": "PolyPitch",
+  "webDir": "../../web",
+  "android": {
+    "backgroundColor": "#070b0e"
+  },
+  "plugins": {
+    "SystemBars": {
+      "style": "DARK"
+    }
+  }
+}

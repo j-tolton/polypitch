@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PolyPitch</string>
+    <string name="title_activity_main">PolyPitch</string>
+    <string name="package_name">app.polypitch</string>
+    <string name="custom_url_scheme">app.polypitch</string>
+</resources>

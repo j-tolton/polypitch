@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.polypitch.web",
+      "sha256_cert_fingerprints": [
+        "4B:17:A2:28:2F:06:EC:54:78:07:78:EA:B4:50:E7:F6:7A:A3:86:D3:4B:FC:E5:0F:6F:BD:83:AA:F6:19:D6:BB"
+      ]
+    }
+  }
+]

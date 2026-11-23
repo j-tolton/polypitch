@@ -11,3 +11,8 @@ tests/evidence_test
 check.js
 head.txt
 snippet.txt
+
+# Android app builds
+app/capacitor/node_modules/
+!app/**/res/**/*.png
+app/dist/

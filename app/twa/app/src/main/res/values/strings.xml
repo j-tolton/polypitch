@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PolyPitch</string>
+    <string name="launch_url">https://polypitch.pages.dev/</string>
+    <string name="provider_authority">app.polypitch.web.fileprovider</string>
+    <string name="asset_statements" translatable="false">[{\"relation\": [\"delegate_permission/common.handle_all_urls\"], \"target\": {\"namespace\": \"web\", \"site\": \"https://polypitch.pages.dev\"}}]</string>
+</resources>
