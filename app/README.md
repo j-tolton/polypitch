@@ -67,6 +67,12 @@ Copy the APK to the phone and open it. Android asks once to allow installing app
 cd app; node make-icons.js capacitor\android\app\src\main\res twa\app\src\main\res
 ```
 
+## Versions and releases
+
+The Android apps have their own version numbers, starting at 1.0. The web app's number, such as 6.10 in settings, is separate. For each new release, raise `versionCode` by one and set `versionName` in both apps' `app/build.gradle`. Android only installs an update if its `versionCode` is higher.
+
+Signed APKs are attached to GitHub releases tagged `android-v<version>`, rather than committed to the repo.
+
 ## Android-only behaviour in the Capacitor build
 
 It uses three Capacitor plugins: App, Filesystem and Share.
